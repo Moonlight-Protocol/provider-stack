@@ -1,12 +1,12 @@
 # syntax=docker/dockerfile:1
 
-# Stage 1: build the frontend
-FROM node:22-alpine AS frontend
+# Stage 1: build the frontend (Deno + esbuild via npm: imports — matches existing Moonlight pattern)
+FROM denoland/deno:alpine AS frontend
 WORKDIR /app/frontend
-COPY frontend/package.json frontend/package-lock.json* ./
-RUN npm ci
+COPY frontend/deno.json frontend/deno.lock* ./
+RUN deno cache deno.json || true
 COPY frontend/ ./
-RUN npm run build
+RUN deno task build
 
 # Stage 2: build the rust binary (with embedded frontend)
 FROM rust:1.85-slim AS backend

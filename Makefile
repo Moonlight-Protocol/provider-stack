@@ -3,7 +3,7 @@
 build: frontend backend
 
 frontend:
-	cd frontend && npm ci && npm run build
+	cd frontend && deno task build
 
 backend:
 	cargo build --release
@@ -22,4 +22,4 @@ docker:
 
 clean:
 	cargo clean
-	rm -rf frontend/public frontend/node_modules
+	rm -rf frontend/public/app.js frontend/public/styles.css frontend/public/health.json frontend/node_modules
