@@ -19,6 +19,10 @@ provider-stack-persistence = { path = "../persistence" }
 stellar-xdr.workspace = true
 stellar-strkey.workspace = true
 ed25519-dalek.workspace = true
+sqlx.workspace = true
+uuid.workspace = true
+base64.workspace = true
+serde_json.workspace = true
 
 [dependencies]
 provider-stack-core = { path = "../core" }
