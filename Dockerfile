@@ -1,5 +1,3 @@
-# syntax=docker/dockerfile:1
-
 # Stage 1: build the frontend (Deno + esbuild via npm: imports — matches existing Moonlight pattern)
 FROM denoland/deno:alpine AS frontend
 WORKDIR /app/frontend
