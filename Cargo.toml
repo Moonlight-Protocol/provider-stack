@@ -1,0 +1,76 @@
+[workspace]
+members = ["crates/api", "crates/core", "crates/persistence", "crates/sdk"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+authors = ["Moonlight Protocol"]
+
+[workspace.dependencies]
+# Web
+actix-web = "4.13"
+actix-ws = "0.3"
+actix-files = "0.6"
+actix-cors = "0.7"
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# Database
+sqlx = { version = "0.9", features = [
+    "runtime-tokio",
+    "tls-rustls",
+    "postgres",
+    "macros",
+    "chrono",
+    "uuid",
+    "migrate",
+    "json",
+] }
+
+# Stellar / Soroban
+stellar-xdr = { version = "27", features = ["std", "serde", "base64"] }
+stellar-strkey = "0.0.16"
+soroban-client = "0.5"
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+
+# soroban-core shared modules (consumed as git deps)
+moonlight-primitives = { git = "https://github.com/Moonlight-Protocol/soroban-core", package = "moonlight-primitives" }
+moonlight-utxo-core = { git = "https://github.com/Moonlight-Protocol/soroban-core", package = "moonlight-utxo-core" }
+moonlight-auth = { git = "https://github.com/Moonlight-Protocol/soroban-core", package = "moonlight-auth" }
+moonlight-helpers = { git = "https://github.com/Moonlight-Protocol/soroban-core", package = "moonlight-helpers" }
+
+# Auth / JWT
+jsonwebtoken = "9"
+
+# Embedding
+include_dir = "0.7"
+
+# Tracing / OTEL
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+tracing-actix-web = "0.7"
+tracing-opentelemetry = "0.33"
+opentelemetry = "0.32"
+opentelemetry_sdk = { version = "0.32", features = ["rt-tokio"] }
+opentelemetry-otlp = { version = "0.32", features = ["http-proto", "reqwest-client"] }
+
+# Errors / utilities
+anyhow = "1"
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["serde", "v4"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+dotenvy = "0.15"
+base64 = "0.22"
+rand = "0.8"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true

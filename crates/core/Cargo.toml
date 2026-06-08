@@ -1,0 +1,32 @@
+[package]
+name = "provider-stack-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+provider-stack-persistence = { path = "../persistence" }
+provider-stack-sdk = { path = "../sdk" }
+
+tokio.workspace = true
+tracing.workspace = true
+
+stellar-xdr.workspace = true
+stellar-strkey.workspace = true
+ed25519-dalek.workspace = true
+jsonwebtoken.workspace = true
+
+moonlight-primitives.workspace = true
+moonlight-utxo-core.workspace = true
+moonlight-auth.workspace = true
+moonlight-helpers.workspace = true
+
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+chrono.workspace = true
+uuid.workspace = true
+base64.workspace = true
+rand.workspace = true

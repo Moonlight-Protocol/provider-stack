@@ -1,0 +1,25 @@
+[package]
+name = "provider-stack-sdk"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+soroban-client.workspace = true
+stellar-xdr.workspace = true
+stellar-strkey.workspace = true
+
+moonlight-primitives.workspace = true
+moonlight-utxo-core.workspace = true
+moonlight-auth.workspace = true
+moonlight-helpers.workspace = true
+
+tokio.workspace = true
+tracing.workspace = true
+reqwest.workspace = true
+
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true

@@ -1,0 +1,7 @@
+/target
+/frontend/public
+/frontend/node_modules
+.env
+.env.local
+*.swp
+.DS_Store
