@@ -12,6 +12,7 @@ provider-stack-sdk = { path = "../sdk" }
 tokio.workspace = true
 tracing.workspace = true
 sqlx.workspace = true
+sha2 = "0.10"
 
 stellar-xdr.workspace = true
 stellar-strkey.workspace = true

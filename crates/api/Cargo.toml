@@ -5,9 +5,20 @@ edition.workspace = true
 license.workspace = true
 authors.workspace = true
 
+[lib]
+name = "provider_stack_api"
+path = "src/lib.rs"
+
 [[bin]]
 name = "provider-stack"
 path = "src/main.rs"
+
+[dev-dependencies]
+provider-stack-core = { path = "../core" }
+provider-stack-persistence = { path = "../persistence" }
+stellar-xdr.workspace = true
+stellar-strkey.workspace = true
+ed25519-dalek.workspace = true
 
 [dependencies]
 provider-stack-core = { path = "../core" }
