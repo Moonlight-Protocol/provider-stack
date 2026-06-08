@@ -86,7 +86,9 @@ pub fn build_test_app_state(
 
     let config = Arc::new(Config {
         port: 0,
-        mode: "test".into(),
+        // "development" matches the Deno reference's SSRF bypass guard so wiremock
+        // can answer from 127.0.0.1 without triggering enforce_url_safety.
+        mode: "development".into(),
         log_level: "warn".into(),
         database_url: String::new(),
         network: "standalone".into(),
