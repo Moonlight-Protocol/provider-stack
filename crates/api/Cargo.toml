@@ -25,6 +25,7 @@ base64.workspace = true
 serde_json.workspace = true
 wiremock = "0.6"
 reqwest.workspace = true
+soroban-client.workspace = true
 
 [dependencies]
 provider-stack-core = { path = "../core" }

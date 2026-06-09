@@ -402,6 +402,14 @@ impl BundleTransactionRepo {
             .await?;
         Ok(rows.into_iter().map(|r| r.get::<String, _>(0)).collect())
     }
+
+    pub async fn list_bundles_for_transaction(&self, transaction_id: &str) -> Result<Vec<String>> {
+        let rows = sqlx::query(r#"SELECT bundle_id FROM bundles_transactions WHERE transaction_id = $1"#)
+            .bind(transaction_id)
+            .fetch_all(&self.pool)
+            .await?;
+        Ok(rows.into_iter().map(|r| r.get::<String, _>(0)).collect())
+    }
 }
 
 // ---- utxos ----

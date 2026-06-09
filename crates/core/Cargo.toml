@@ -24,6 +24,8 @@ moonlight-utxo-core.workspace = true
 moonlight-auth.workspace = true
 moonlight-helpers.workspace = true
 
+soroban-client.workspace = true
+
 serde.workspace = true
 serde_json.workspace = true
 anyhow.workspace = true
