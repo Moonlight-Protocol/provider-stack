@@ -32,6 +32,12 @@ pub async fn add_bundle(
     Ok(row.id)
 }
 
+/// Mempool-aware fee derivation. Matches the per-tick weight model the mempool processor uses:
+/// each op contributes `cheap_op_weight`; the network fee is the base unit multiplier.
+pub fn derive_fee(op_count: usize, cheap_op_weight: u32, network_fee: i64) -> i64 {
+    (op_count as i64) * (cheap_op_weight as i64) * network_fee
+}
+
 pub fn classify_status(input: &AddBundleInput) -> BundleStatus {
     // TODO: reach into moonlight-utxo-core's classifier; for the scaffold we mark
     // everything PENDING for the mempool to pick up.
