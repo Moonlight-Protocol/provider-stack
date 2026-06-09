@@ -7,10 +7,13 @@ COPY frontend/ ./
 RUN deno task build
 
 # Stage 2: build the rust binary (with embedded frontend)
-FROM rust:1.85-slim AS backend
+FROM rust:1.94-slim AS backend
 WORKDIR /app
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends pkg-config libssl-dev git ca-certificates \
+    && apt-get install -y --no-install-recommends \
+        pkg-config libssl-dev git ca-certificates \
+        build-essential make cmake \
+        libsodium-dev \
     && rm -rf /var/lib/apt/lists/*
 COPY Cargo.toml Cargo.lock* ./
 COPY crates/ ./crates/
