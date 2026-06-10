@@ -26,6 +26,9 @@ serde_json.workspace = true
 wiremock = "0.6"
 reqwest.workspace = true
 soroban-client.workspace = true
+tokio-tungstenite = "0.24"
+tokio.workspace = true
+futures-util = "0.3"
 
 [dependencies]
 provider-stack-core = { path = "../core" }
