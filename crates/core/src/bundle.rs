@@ -1,9 +1,8 @@
-//! Bundle ingest: accept entity-submitted MLXDR operations, classify, persist, enqueue.
-//!
-//! Uses `moonlight-utxo-core` for the bundle classification / weight / priority primitives
-//! (same Rust types the on-chain channel contract uses).
+//! Bundle ingest: decode MLXDR ops, classify, fetch on-chain UTXO balances for Spends,
+//! derive fee per the provider-platform formula, persist a PENDING row.
 
 use crate::error::CoreError;
+use crate::mlxdr::{classify, Amounts, Classified, MlxdrError};
 use provider_stack_persistence::{BundleStatus, OperationsBundleRepo};
 
 pub struct AddBundleInput {
@@ -32,15 +31,48 @@ pub async fn add_bundle(
     Ok(row.id)
 }
 
-/// Mempool-aware fee derivation. Matches the per-tick weight model the mempool processor uses:
-/// each op contributes `cheap_op_weight`; the network fee is the base unit multiplier.
-pub fn derive_fee(op_count: usize, cheap_op_weight: u32, network_fee: i64) -> i64 {
-    (op_count as i64) * (cheap_op_weight as i64) * network_fee
+/// Decode the operations_mlxdr JSON array (`Value::Array<String>`) into a Classified bundle.
+///
+/// Also returns each Spend op's 65-byte UTXO pubkey in the same order, so callers can fetch
+/// on-chain balances and feed them back into `derive_fee_from_classified` in the same order.
+pub fn classify_bundle(
+    operations_mlxdr: &serde_json::Value,
+) -> Result<(Classified, Vec<Vec<u8>>), BundleError> {
+    let arr = operations_mlxdr
+        .as_array()
+        .ok_or(BundleError::OperationsNotArray)?;
+    let mut refs: Vec<&str> = Vec::with_capacity(arr.len());
+    for v in arr {
+        refs.push(v.as_str().ok_or(BundleError::OperationsNotStrings)?);
+    }
+    let classified = classify(&refs).map_err(BundleError::Mlxdr)?;
+    let spend_utxos: Vec<Vec<u8>> = classified.spend.iter().map(|o| o.utxo.clone()).collect();
+    Ok((classified, spend_utxos))
 }
 
-pub fn classify_status(input: &AddBundleInput) -> BundleStatus {
-    // TODO: reach into moonlight-utxo-core's classifier; for the scaffold we mark
-    // everything PENDING for the mempool to pick up.
-    let _ = input;
+/// Compute the bundle fee per the provider-platform formula. Caller supplies spend balances
+/// aligned with the `Classified.spend` ordering when Spend ops are present (empty slice for
+/// pure deposit/create bundles).
+pub fn derive_fee_from_classified(classified: &Classified, spend_balances: &[i128]) -> i128 {
+    let amounts = Amounts::from_classified(classified, spend_balances);
+    crate::mlxdr::calculate_fee(amounts)
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum BundleError {
+    #[error("operations_mlxdr must be a JSON array")]
+    OperationsNotArray,
+
+    #[error("operations_mlxdr entries must be strings")]
+    OperationsNotStrings,
+
+    #[error("mlxdr decode: {0}")]
+    Mlxdr(#[from] MlxdrError),
+
+    #[error("bundle has Spend ops but no channel_contract_id was supplied")]
+    SpendWithoutChannel,
+}
+
+pub fn classify_status(_input: &AddBundleInput) -> BundleStatus {
     BundleStatus::Pending
 }

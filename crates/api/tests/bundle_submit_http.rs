@@ -1,22 +1,26 @@
 //! HTTP integration test for the entity bundle submission endpoint.
 //!
 //! POST /api/v1/providers/{pk}/entity/bundles with a valid entity JWT:
+//!   - decodes the MLXDR ops + computes the fee per the provider-platform formula,
 //!   - inserts a PENDING operations_bundles row,
-//!   - computes the fee via the mempool weight model,
 //!   - returns 201 with bundle_id + status.
-//! 0-op submissions → 400; over-cap submissions → 400; missing JWT → 401.
+//! 0-op submissions → 400; missing JWT → 401; non-MLXDR strings → 400.
 
 mod common;
 
 use actix_web::{test, web, App};
+use base64::engine::general_purpose::STANDARD as B64;
+use base64::Engine;
 use common::{build_test_app_state, pp_strkey, TestDb};
 use ed25519_dalek::SigningKey;
 use provider_stack_api::routing;
 use provider_stack_core::auth::{mint_token, JwtKind};
 use serde_json::{json, Value};
+use soroban_client::xdr::{Int128Parts, Limits, ScAddress, ScBytes, ScVal, ScVec, VecM, WriteXdr};
 use sqlx::Row;
 
 const SERVICE_DOMAIN: &str = "smoke.local";
+const ML_PREFIX: [u8; 2] = [0x30, 0xb0];
 
 async fn skip_if_no_db() -> Option<TestDb> {
     if std::env::var("DATABASE_URL").is_err() {
@@ -46,8 +50,57 @@ fn entity_jwt(state: &provider_stack_api::state::AppState) -> String {
     .expect("mint entity JWT")
 }
 
+// ---- MLXDR builders matching moonlight-sdk's wire format ----
+
+fn i128_parts(v: i128) -> Int128Parts {
+    Int128Parts {
+        hi: ((v as i128) >> 64) as i64,
+        lo: ((v as u128) & 0xFFFF_FFFF_FFFF_FFFF) as u64,
+    }
+}
+
+fn build_mlxdr(type_byte: u8, op_payload: ScVal) -> String {
+    let signature = ScVal::Vec(Some(ScVec(VecM::try_from(Vec::<ScVal>::new()).unwrap())));
+    let outer = ScVal::Vec(Some(ScVec(
+        VecM::try_from(vec![op_payload, signature]).unwrap(),
+    )));
+    let xdr_bytes = outer.to_xdr(Limits::none()).unwrap();
+    let mut buf = Vec::with_capacity(3 + xdr_bytes.len());
+    buf.extend_from_slice(&ML_PREFIX);
+    buf.push(type_byte);
+    buf.extend_from_slice(&xdr_bytes);
+    B64.encode(buf)
+}
+
+fn create_mlxdr(utxo: [u8; 65], amount: i128) -> String {
+    let payload = ScVal::Vec(Some(ScVec(
+        VecM::try_from(vec![
+            ScVal::Bytes(ScBytes(utxo.to_vec().try_into().unwrap())),
+            ScVal::I128(i128_parts(amount)),
+        ])
+        .unwrap(),
+    )));
+    build_mlxdr(0x04, payload)
+}
+
+fn deposit_mlxdr(amount: i128) -> String {
+    let payload = ScVal::Vec(Some(ScVec(
+        VecM::try_from(vec![
+            ScVal::Address(ScAddress::Account(soroban_client::xdr::AccountId(
+                soroban_client::xdr::PublicKey::PublicKeyTypeEd25519(
+                    soroban_client::xdr::Uint256([0xABu8; 32]),
+                ),
+            ))),
+            ScVal::I128(i128_parts(amount)),
+            ScVal::Vec(Some(ScVec(VecM::try_from(Vec::<ScVal>::new()).unwrap()))),
+        ])
+        .unwrap(),
+    )));
+    build_mlxdr(0x06, payload)
+}
+
 #[actix_web::test]
-async fn submitting_a_bundle_inserts_row_with_computed_fee() {
+async fn bundle_with_deposit_plus_create_computes_correct_fee() {
     let Some(db) = skip_if_no_db().await else { return; };
 
     let pp_seed = [0xABu8; 32];
@@ -64,15 +117,17 @@ async fn submitting_a_bundle_inserts_row_with_computed_fee() {
     )
     .await;
 
-    let body = json!({
-        "operations_mlxdr": ["op1-b64", "op2-b64", "op3-b64"],
-        "channel_contract_id": null,
-    });
+    // 1 deposit (1000) + 2 creates (300 + 200 = 500) → fee = 1000 - 500 = 500.
+    let ops = vec![
+        deposit_mlxdr(1000),
+        create_mlxdr([0x11u8; 65], 300),
+        create_mlxdr([0x22u8; 65], 200),
+    ];
 
     let req = test::TestRequest::post()
         .uri(&format!("/api/v1/providers/{pp_pk}/entity/bundles"))
         .insert_header(("Authorization", format!("Bearer {token}")))
-        .set_json(&body)
+        .set_json(json!({ "operations_mlxdr": ops }))
         .to_request();
     let resp = test::call_service(&app, req).await;
     assert_eq!(resp.status().as_u16(), 201, "expected 201, got {}", resp.status());
@@ -89,12 +144,7 @@ async fn submitting_a_bundle_inserts_row_with_computed_fee() {
     .await
     .expect("bundle row");
     assert_eq!(row.get::<String, _>("status"), "PENDING");
-
-    // Fee = op_count * cheap_op_weight * network_fee.
-    let expected = 3i64
-        * (state.config.mempool.cheap_op_weight as i64)
-        * state.config.network_fee;
-    assert_eq!(row.get::<i64, _>("fee"), expected, "fee should match weight model");
+    assert_eq!(row.get::<i64, _>("fee"), 500, "fee should be 1000 - 500 = 500");
     assert_eq!(row.get::<Option<String>, _>("created_by"), Some(entity_strkey()));
 
     db.cleanup().await;
@@ -148,10 +198,39 @@ async fn missing_jwt_returns_401() {
 
     let req = test::TestRequest::post()
         .uri(&format!("/api/v1/providers/{pp_pk}/entity/bundles"))
-        .set_json(json!({ "operations_mlxdr": ["op1"] }))
+        .set_json(json!({ "operations_mlxdr": [deposit_mlxdr(100)] }))
         .to_request();
     let resp = test::call_service(&app, req).await;
     assert_eq!(resp.status().as_u16(), 401, "expected 401, got {}", resp.status());
+
+    db.cleanup().await;
+}
+
+#[actix_web::test]
+async fn non_mlxdr_string_returns_400() {
+    let Some(db) = skip_if_no_db().await else { return; };
+
+    let pp_seed = [0xABu8; 32];
+    let operator_strkey = pp_strkey([0xCCu8; 32]);
+    let state =
+        build_test_app_state(pp_seed, operator_strkey, db.pool.clone(), SERVICE_DOMAIN);
+    let pp_pk = pp_strkey(pp_seed);
+    let token = entity_jwt(&state);
+
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state.clone()))
+            .configure(routing::configure),
+    )
+    .await;
+
+    let req = test::TestRequest::post()
+        .uri(&format!("/api/v1/providers/{pp_pk}/entity/bundles"))
+        .insert_header(("Authorization", format!("Bearer {token}")))
+        .set_json(json!({ "operations_mlxdr": ["not-real-mlxdr"] }))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status().as_u16(), 400, "expected 400 for non-MLXDR input; got {}", resp.status());
 
     db.cleanup().await;
 }
