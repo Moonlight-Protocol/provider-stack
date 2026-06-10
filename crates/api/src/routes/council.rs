@@ -1,11 +1,13 @@
 //! Council discover / join / membership.
 //!
-//! discover: HTTP GET council-platform `/api/v1/public/council?councilId=...`, return the
-//!           payload to the operator.
-//! join:     POST signed envelope to council-platform `/api/v1/public/provider/join-request`,
-//!           insert local `council_memberships` row with status=PENDING.
-//! membership GET: read the latest active row for the configured PP.
+//! Wire shapes match the Deno reference:
+//!  - Requests use camelCase keys (`councilUrl`, `councilId`, `signedEnvelope`, …).
+//!  - Successful responses are wrapped in `{ data: ... }`.
+//!  - GET `/council/membership` returns the latest single membership for the (single) PP
+//!    — `{ data: { status, councilUrl, ... } }` — which is what testnet/main.ts polls for
+//!    `data.status === "ACTIVE"`.
 
+use crate::envelope::Data;
 use crate::error::ApiError;
 use crate::middleware_auth::OperatorAuth;
 use crate::state::AppState;
@@ -21,14 +23,19 @@ const COUNCIL_HTTP_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_DISCOVER_BODY_BYTES: u64 = 1_048_576;
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DiscoverReq {
     pub council_url: String,
 }
 
 #[derive(Serialize)]
-pub struct DiscoverRes {
-    pub message: &'static str,
-    pub data: JsonValue,
+#[serde(rename_all = "camelCase")]
+pub struct DiscoverPayload {
+    pub council_url: String,
+    pub council: JsonValue,
+    pub jurisdictions: JsonValue,
+    pub channels: JsonValue,
+    pub providers: JsonValue,
 }
 
 #[post("/dashboard/council/discover")]
@@ -42,12 +49,7 @@ pub async fn post_discover(
     enforce_url_safety(&parsed, &state.config.mode)?;
 
     let council_id = extract_council_id(&body.council_url, &parsed);
-    let base = format!("{}://{}", parsed.scheme(), parsed.host_str().unwrap_or(""));
-    let port = parsed
-        .port_or_known_default()
-        .map(|p| format!(":{p}"))
-        .unwrap_or_default();
-    let base_url = format!("{base}{port}");
+    let base_url = base_origin(&parsed);
 
     let qs = council_id
         .as_deref()
@@ -88,10 +90,8 @@ pub async fn post_discover(
         .await
         .map_err(|e| ApiError::Internal(format!("council body parse: {e}")))?;
 
-    // Council payload should sit under `data` per the reference shape.
     let data = body.get("data").cloned().unwrap_or(body);
 
-    // Cross-check: if a council ID was extracted, it must match the response.
     if let Some(expected_id) = &council_id {
         if let Some(council) = data.get("council") {
             if let Some(returned_id) = council.get("channelAuthId").and_then(|v| v.as_str()) {
@@ -104,30 +104,30 @@ pub async fn post_discover(
         }
     }
 
-    Ok(HttpResponse::Ok().json(DiscoverRes {
-        message: "Council discovered",
-        data: serde_json::json!({
-            "councilUrl": base_url,
-            "council": data.get("council").cloned().unwrap_or(JsonValue::Null),
-            "jurisdictions": data.get("jurisdictions").cloned().unwrap_or(JsonValue::Null),
-            "channels": data.get("channels").cloned().unwrap_or(JsonValue::Null),
-            "providers": data.get("providers").cloned().unwrap_or(JsonValue::Null),
-        }),
-    }))
+    Ok(HttpResponse::Ok().json(Data::new(DiscoverPayload {
+        council_url: base_url,
+        council: data.get("council").cloned().unwrap_or(JsonValue::Null),
+        jurisdictions: data.get("jurisdictions").cloned().unwrap_or(JsonValue::Null),
+        channels: data.get("channels").cloned().unwrap_or(JsonValue::Null),
+        providers: data.get("providers").cloned().unwrap_or(JsonValue::Null),
+    })))
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct JoinReq {
     pub council_url: String,
     pub council_id: Option<String>,
     pub council_name: Option<String>,
     pub council_public_key: Option<String>,
+    pub label: Option<String>,
+    pub contact_email: Option<String>,
     pub signed_envelope: JsonValue,
 }
 
 #[derive(Serialize)]
-pub struct JoinRes {
-    pub message: &'static str,
+#[serde(rename_all = "camelCase")]
+pub struct JoinPayload {
     pub membership_id: String,
     pub status: &'static str,
 }
@@ -139,7 +139,7 @@ pub async fn post_join(
     path: web::Path<String>,
     body: web::Json<JoinReq>,
 ) -> Result<impl Responder, ApiError> {
-    let _pk = path.into_inner(); // single-PP shape — ignored; OperatorAuth already gates this
+    let _pk = path.into_inner(); // single-PP shape — OperatorAuth already gates this
     let req = body.into_inner();
 
     let parsed = Url::parse(&req.council_url)
@@ -150,23 +150,23 @@ pub async fn post_join(
         .council_id
         .clone()
         .or_else(|| extract_council_id(&req.council_url, &parsed))
-        .ok_or_else(|| ApiError::BadRequest("council_id required".into()))?;
-    let base = format!("{}://{}", parsed.scheme(), parsed.host_str().unwrap_or(""));
-    let port = parsed
-        .port_or_known_default()
-        .map(|p| format!(":{p}"))
-        .unwrap_or_default();
-    let base_url = format!("{base}{port}");
+        .ok_or_else(|| ApiError::BadRequest("councilId required".into()))?;
+    let base_url = base_origin(&parsed);
 
-    // Build the relay payload — spread signedEnvelope + providerUrl.
     let mut payload = req.signed_envelope.clone();
     if let JsonValue::Object(map) = &mut payload {
         map.insert(
             "providerUrl".into(),
             JsonValue::String(state.config.provider_base_url.clone()),
         );
+        if let Some(ref label) = req.label {
+            map.entry("label").or_insert_with(|| JsonValue::String(label.clone()));
+        }
+        if let Some(ref ce) = req.contact_email {
+            map.entry("contactEmail").or_insert_with(|| JsonValue::String(ce.clone()));
+        }
     } else {
-        return Err(ApiError::BadRequest("signed_envelope must be a JSON object".into()));
+        return Err(ApiError::BadRequest("signedEnvelope must be a JSON object".into()));
     }
 
     let client = reqwest::Client::builder()
@@ -222,13 +222,22 @@ pub async fn post_join(
         )
         .await?;
 
-    let _ = (req.council_name, join_request_id); // future columns; not in current schema set
+    let _ = (req.council_name, join_request_id); // future columns; not in current schema
 
-    Ok(HttpResponse::Created().json(JoinRes {
-        message: "Council join request submitted",
+    Ok(HttpResponse::Created().json(Data::new(JoinPayload {
         membership_id: membership.id,
         status: "PENDING",
-    }))
+    })))
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MembershipPayload {
+    pub status: String,
+    pub channel_auth_id: String,
+    pub council_url: String,
+    pub council_public_key: String,
+    pub claimed_jurisdictions: Option<String>,
 }
 
 #[get("/providers/{pk}/council/membership")]
@@ -239,7 +248,28 @@ pub async fn get_membership(
 ) -> Result<impl Responder, ApiError> {
     let repo = CouncilMembershipRepo::new(state.pool.clone());
     let memberships = repo.list_active().await?;
-    Ok::<_, ApiError>(HttpResponse::Ok().json(serde_json::json!({ "memberships": memberships })))
+    // testnet/main.ts polls until `data.status === "ACTIVE"` — return the most recent
+    // membership for this single-PP stack. If none, 404.
+    let latest = memberships.first().ok_or(ApiError::NotFound)?;
+    let status = match latest.status {
+        CouncilMembershipStatus::Active => "ACTIVE",
+        CouncilMembershipStatus::Pending => "PENDING",
+        CouncilMembershipStatus::Rejected => "REJECTED",
+    };
+    Ok(HttpResponse::Ok().json(Data::new(MembershipPayload {
+        status: status.into(),
+        channel_auth_id: latest.channel_auth_id.clone(),
+        council_url: latest.council_url.clone(),
+        council_public_key: latest.council_public_key.clone(),
+        claimed_jurisdictions: latest.claimed_jurisdictions.clone(),
+    })))
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncPayload {
+    pub memberships: usize,
+    pub updated: usize,
 }
 
 #[post("/providers/{pk}/council/membership")]
@@ -248,7 +278,6 @@ pub async fn post_membership(
     _auth: OperatorAuth,
     _path: web::Path<String>,
 ) -> Result<impl Responder, ApiError> {
-    // Resync: re-fetch every active membership's council and update status.
     let repo = CouncilMembershipRepo::new(state.pool.clone());
     let memberships = repo.list_active().await?;
 
@@ -290,16 +319,25 @@ pub async fn post_membership(
         }
     }
 
-    Ok(HttpResponse::Ok().json(serde_json::json!({ "memberships": memberships.len(), "updated": updated })))
+    Ok(HttpResponse::Ok().json(Data::new(SyncPayload {
+        memberships: memberships.len(),
+        updated,
+    })))
 }
 
 // ---- helpers ----
 
+fn base_origin(parsed: &Url) -> String {
+    let port = parsed
+        .port_or_known_default()
+        .map(|p| format!(":{p}"))
+        .unwrap_or_default();
+    format!("{}://{}{}", parsed.scheme(), parsed.host_str().unwrap_or(""), port)
+}
+
 fn enforce_url_safety(parsed: &Url, mode: &str) -> Result<(), ApiError> {
     if parsed.scheme() != "http" && parsed.scheme() != "https" {
-        return Err(ApiError::BadRequest(
-            "council_url must be http(s)".into(),
-        ));
+        return Err(ApiError::BadRequest("council_url must be http(s)".into()));
     }
     if mode == "development" {
         return Ok(());
@@ -327,14 +365,19 @@ fn enforce_url_safety(parsed: &Url, mode: &str) -> Result<(), ApiError> {
 }
 
 fn extract_council_id(raw_url: &str, parsed: &Url) -> Option<String> {
-    if let Some(id) = parsed.query_pairs().find(|(k, _)| k == "council").map(|(_, v)| v.into_owned()) {
+    if let Some(id) = parsed
+        .query_pairs()
+        .find(|(k, _)| k == "council")
+        .map(|(_, v)| v.into_owned())
+    {
         return Some(id);
     }
-    // Fragment form: #/join?council=C... (URL strips the fragment).
     let pat = "council=";
     if let Some(start) = raw_url.find(pat) {
         let tail = &raw_url[start + pat.len()..];
-        let end = tail.find(|c: char| !c.is_ascii_alphanumeric() && c != '_').unwrap_or(tail.len());
+        let end = tail
+            .find(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+            .unwrap_or(tail.len());
         if end > 0 {
             return Some(tail[..end].to_string());
         }
@@ -343,7 +386,6 @@ fn extract_council_id(raw_url: &str, parsed: &Url) -> Option<String> {
 }
 
 fn urlencoding(s: &str) -> String {
-    // Minimal: %-encode anything outside [A-Za-z0-9_-.~]
     let mut out = String::with_capacity(s.len());
     for byte in s.bytes() {
         if byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.' | b'~') {

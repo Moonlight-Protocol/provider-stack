@@ -1,29 +1,30 @@
 //! SEP-10 entity auth.
 //!
-//! `GET  /api/v1/stellar/auth?account=G...` → server-signed challenge envelope (base64 XDR).
-//! `POST /api/v1/stellar/auth { transaction }` → entity JWT, after dual-sig + timebound + structure verification.
+//! GET  /api/v1/stellar/auth?account=G...  → `{ data: { challenge, networkPassphrase } }`
+//! POST /api/v1/stellar/auth { transaction } → `{ data: { token } }`
 
+use crate::envelope::Data;
 use crate::error::ApiError;
 use crate::state::AppState;
 use actix_web::{get, post, web, HttpResponse, Responder};
 use provider_stack_core::auth::{
     mint_token,
-    sep10::{
-        build_challenge, passphrase_for, signing_key_from_seed, verify_signed_envelope,
-    },
+    sep10::{build_challenge, passphrase_for, signing_key_from_seed, verify_signed_envelope},
     JwtKind,
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ChallengeQuery {
     pub account: String,
 }
 
 #[derive(Serialize)]
-pub struct ChallengeRes {
-    pub transaction: String,
+#[serde(rename_all = "camelCase")]
+pub struct ChallengePayload {
+    pub challenge: String,
     pub network_passphrase: String,
 }
 
@@ -48,19 +49,21 @@ pub async fn get_challenge(
         state.config.challenge_ttl.as_secs(),
     )?;
 
-    Ok(HttpResponse::Ok().json(ChallengeRes {
-        transaction: built.envelope_xdr_b64,
+    Ok(HttpResponse::Ok().json(Data::new(ChallengePayload {
+        challenge: built.envelope_xdr_b64,
         network_passphrase: built.network_passphrase,
-    }))
+    })))
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct VerifyReq {
     pub transaction: String,
 }
 
 #[derive(Serialize)]
-pub struct VerifyRes {
+#[serde(rename_all = "camelCase")]
+pub struct VerifyPayload {
     pub token: String,
 }
 
@@ -92,5 +95,5 @@ pub async fn post_verify(
         state.config.session_ttl.as_secs() as i64,
     )?;
 
-    Ok(HttpResponse::Ok().json(VerifyRes { token }))
+    Ok(HttpResponse::Ok().json(Data::new(VerifyPayload { token })))
 }

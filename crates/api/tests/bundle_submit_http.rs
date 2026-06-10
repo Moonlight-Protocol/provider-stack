@@ -127,14 +127,17 @@ async fn bundle_with_deposit_plus_create_computes_correct_fee() {
     let req = test::TestRequest::post()
         .uri(&format!("/api/v1/providers/{pp_pk}/entity/bundles"))
         .insert_header(("Authorization", format!("Bearer {token}")))
-        .set_json(json!({ "operations_mlxdr": ops }))
+        .set_json(json!({ "operationsMLXDR": ops }))
         .to_request();
     let resp = test::call_service(&app, req).await;
     assert_eq!(resp.status().as_u16(), 201, "expected 201, got {}", resp.status());
 
     let res_body: Value = test::read_body_json(resp).await;
-    let bundle_id = res_body["bundle_id"].as_str().expect("bundle_id").to_string();
-    assert_eq!(res_body["status"], "PENDING");
+    let bundle_id = res_body["data"]["operationsBundleId"]
+        .as_str()
+        .expect("data.operationsBundleId")
+        .to_string();
+    assert_eq!(res_body["data"]["status"], "PENDING");
 
     let row = sqlx::query(
         r#"SELECT status::text as status, fee, created_by FROM operations_bundles WHERE id = $1"#,
@@ -171,7 +174,7 @@ async fn empty_operations_returns_400() {
     let req = test::TestRequest::post()
         .uri(&format!("/api/v1/providers/{pp_pk}/entity/bundles"))
         .insert_header(("Authorization", format!("Bearer {token}")))
-        .set_json(json!({ "operations_mlxdr": [] }))
+        .set_json(json!({ "operationsMLXDR": [] }))
         .to_request();
     let resp = test::call_service(&app, req).await;
     assert_eq!(resp.status().as_u16(), 400, "expected 400, got {}", resp.status());
@@ -198,7 +201,7 @@ async fn missing_jwt_returns_401() {
 
     let req = test::TestRequest::post()
         .uri(&format!("/api/v1/providers/{pp_pk}/entity/bundles"))
-        .set_json(json!({ "operations_mlxdr": [deposit_mlxdr(100)] }))
+        .set_json(json!({ "operationsMLXDR": [deposit_mlxdr(100)] }))
         .to_request();
     let resp = test::call_service(&app, req).await;
     assert_eq!(resp.status().as_u16(), 401, "expected 401, got {}", resp.status());
@@ -227,7 +230,7 @@ async fn non_mlxdr_string_returns_400() {
     let req = test::TestRequest::post()
         .uri(&format!("/api/v1/providers/{pp_pk}/entity/bundles"))
         .insert_header(("Authorization", format!("Bearer {token}")))
-        .set_json(json!({ "operations_mlxdr": ["not-real-mlxdr"] }))
+        .set_json(json!({ "operationsMLXDR": ["not-real-mlxdr"] }))
         .to_request();
     let resp = test::call_service(&app, req).await;
     assert_eq!(resp.status().as_u16(), 400, "expected 400 for non-MLXDR input; got {}", resp.status());

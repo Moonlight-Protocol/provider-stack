@@ -66,7 +66,7 @@ async fn full_kyc_register_roundtrip_auto_approves() {
         .set_json(serde_json::json!({ "pubkey": entity_strkey }))
         .to_request();
     let body: serde_json::Value = test::call_and_read_body_json(&app, req).await;
-    let nonce = body["nonce"].as_str().expect("nonce").to_string();
+    let nonce = body["data"]["nonce"].as_str().expect("data.nonce").to_string();
 
     // 2. Register with the signed nonce.
     let signature = sign_nonce(&entity_key, &nonce);
@@ -76,15 +76,14 @@ async fn full_kyc_register_roundtrip_auto_approves() {
             "pubkey": entity_strkey,
             "name": "Test Entity",
             "jurisdictions": ["US"],
-            "nonce": nonce,
-            "signature": signature,
+            "signedChallenge": { "nonce": nonce, "signature": signature },
         }))
         .to_request();
     let resp = test::call_service(&app, req).await;
     assert_eq!(resp.status().as_u16(), 201, "expected 201 Created, got {}", resp.status());
     let body: serde_json::Value = test::read_body_json(resp).await;
-    assert_eq!(body["status"], "APPROVED");
-    assert_eq!(body["entity_id"], entity_strkey);
+    assert_eq!(body["data"]["status"], "APPROVED");
+    assert_eq!(body["data"]["entityId"], entity_strkey);
 
     // 3. Verify DB rows.
     let row = sqlx::query(r#"SELECT status::text as status, name FROM entities WHERE id = $1"#)
@@ -172,7 +171,7 @@ async fn register_rejects_bad_signature_with_401() {
         .set_json(serde_json::json!({ "pubkey": entity_strkey }))
         .to_request();
     let body: serde_json::Value = test::call_and_read_body_json(&app, req).await;
-    let nonce = body["nonce"].as_str().unwrap().to_string();
+    let nonce = body["data"]["nonce"].as_str().unwrap().to_string();
 
     // Sign with a different key — must be rejected as 401.
     let attacker_key = SigningKey::from_bytes(&[0x55u8; 32]);
@@ -181,8 +180,7 @@ async fn register_rejects_bad_signature_with_401() {
         .uri(&format!("/api/v1/providers/{pp_pk}/entities"))
         .set_json(serde_json::json!({
             "pubkey": entity_strkey,
-            "nonce": nonce,
-            "signature": bad_sig,
+            "signedChallenge": { "nonce": nonce, "signature": bad_sig },
         }))
         .to_request();
     let resp = test::call_service(&app, req).await;

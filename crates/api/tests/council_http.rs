@@ -77,7 +77,7 @@ async fn discover_relays_council_payload() {
     let req = test::TestRequest::post()
         .uri("/api/v1/dashboard/council/discover")
         .insert_header(("Authorization", format!("Bearer {token}")))
-        .set_json(json!({ "council_url": format!("{}?council=CABC123", council.uri()) }))
+        .set_json(json!({ "councilUrl": format!("{}?council=CABC123", council.uri()) }))
         .to_request();
     let resp = test::call_service(&app, req).await;
     assert!(resp.status().is_success(), "discover returned {}", resp.status());
@@ -115,7 +115,7 @@ async fn discover_rejects_council_id_mismatch() {
     let req = test::TestRequest::post()
         .uri("/api/v1/dashboard/council/discover")
         .insert_header(("Authorization", format!("Bearer {token}")))
-        .set_json(json!({ "council_url": format!("{}?council=CABC123", council.uri()) }))
+        .set_json(json!({ "councilUrl": format!("{}?council=CABC123", council.uri()) }))
         .to_request();
     let resp = test::call_service(&app, req).await;
     assert_eq!(resp.status().as_u16(), 400, "expected 400, got {}", resp.status());
@@ -153,11 +153,11 @@ async fn join_relays_envelope_and_creates_pending_membership() {
         .uri(&format!("/api/v1/providers/{pp_pk}/council/join"))
         .insert_header(("Authorization", format!("Bearer {token}")))
         .set_json(json!({
-            "council_url": format!("{}?council=CABC123", council.uri()),
-            "council_id": "CABC123",
-            "council_name": "Test Council",
-            "council_public_key": "GCOUNCIL",
-            "signed_envelope": {
+            "councilUrl": format!("{}?council=CABC123", council.uri()),
+            "councilId": "CABC123",
+            "councilName": "Test Council",
+            "councilPublicKey": "GCOUNCIL",
+            "signedEnvelope": {
                 "publicKey": pp_pk,
                 "payload": { "jurisdictions": ["US"] },
                 "signature": "sig"
@@ -168,7 +168,7 @@ async fn join_relays_envelope_and_creates_pending_membership() {
     assert_eq!(resp.status().as_u16(), 201, "expected 201, got {}", resp.status());
 
     let body: serde_json::Value = test::read_body_json(resp).await;
-    assert_eq!(body["status"], "PENDING");
+    assert_eq!(body["data"]["status"], "PENDING");
 
     // Verify a council_memberships row was inserted with status=PENDING.
     let row: (String, String) = sqlx::query_as(
@@ -187,9 +187,9 @@ async fn join_relays_envelope_and_creates_pending_membership() {
         .insert_header(("Authorization", format!("Bearer {token}")))
         .to_request();
     let body: serde_json::Value = test::call_and_read_body_json(&app, req).await;
-    let memberships = body["memberships"].as_array().expect("memberships array");
-    assert_eq!(memberships.len(), 1);
-    assert_eq!(memberships[0]["channel_auth_id"], "CABC123");
+    // get_membership returns the latest single membership wrapped under `data`.
+    assert_eq!(body["data"]["channelAuthId"], "CABC123");
+    assert_eq!(body["data"]["status"], "PENDING");
 
     db.cleanup().await;
 }
@@ -213,8 +213,8 @@ async fn join_requires_operator_jwt() {
     let req = test::TestRequest::post()
         .uri(&format!("/api/v1/providers/{pp_pk}/council/join"))
         .set_json(json!({
-            "council_url": "http://example.com",
-            "signed_envelope": {}
+            "councilUrl": "http://example.com",
+            "signedEnvelope": {}
         }))
         .to_request();
     let resp = test::call_service(&app, req).await;

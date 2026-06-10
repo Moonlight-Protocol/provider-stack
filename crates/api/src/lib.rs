@@ -2,6 +2,7 @@
 //! `routing::configure` for integration tests under `tests/`.
 
 pub mod cli;
+pub mod envelope;
 pub mod error;
 pub mod middleware_auth;
 pub mod routes;

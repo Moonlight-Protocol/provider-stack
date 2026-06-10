@@ -118,11 +118,11 @@ async fn sep10_full_roundtrip_issues_entity_jwt() {
         resp.status()
     );
     let body: serde_json::Value = test::read_body_json(resp).await;
-    let envelope_b64 = body["transaction"]
+    let envelope_b64 = body["data"]["challenge"]
         .as_str()
-        .expect("transaction field")
+        .expect("data.challenge field")
         .to_string();
-    let net_passphrase = body["network_passphrase"].as_str().unwrap().to_string();
+    let net_passphrase = body["data"]["networkPassphrase"].as_str().unwrap().to_string();
     assert_eq!(net_passphrase, passphrase_for(&state.config.network));
 
     // Sanity: envelope already carries the server signature.
@@ -155,7 +155,7 @@ async fn sep10_full_roundtrip_issues_entity_jwt() {
         resp.status()
     );
     let body: serde_json::Value = test::read_body_json(resp).await;
-    let token = body["token"].as_str().expect("token field").to_string();
+    let token = body["data"]["token"].as_str().expect("data.token field").to_string();
 
     // 4. Decode + assert claims.
     let claims = verify_token(&secret_for_jwt, &token).expect("verify_token");
@@ -194,7 +194,7 @@ async fn sep10_post_rejects_envelope_without_client_signature() {
         .uri(&format!("/api/v1/stellar/auth?account={entity_strkey}"))
         .to_request();
     let body: serde_json::Value = test::call_and_read_body_json(&app, req).await;
-    let envelope_b64 = body["transaction"].as_str().unwrap().to_string();
+    let envelope_b64 = body["data"]["challenge"].as_str().unwrap().to_string();
 
     // Don't co-sign; just post it back as the entity, expect 401.
     let req = test::TestRequest::post()

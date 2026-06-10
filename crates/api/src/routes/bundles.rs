@@ -1,9 +1,10 @@
 //! Entity bundle submission + listing.
 //!
-//! POST decodes the MLXDR ops, classifies them, fetches on-chain UTXO balances for any
-//! Spend ops via the channel contract, computes the bundle fee per the provider-platform
-//! formula, then persists a PENDING row.
+//! Wire shapes match the Deno reference: request keys camelCase (`operationsMLXDR`,
+//! `channelContractId`), success responses wrapped in `{ data: ... }`. The tests at
+//! `local-dev/lib/client/bundle.ts` read `data.data.operationsBundleId`.
 
+use crate::envelope::Data;
 use crate::error::ApiError;
 use crate::middleware_auth::EntityAuth;
 use crate::state::AppState;
@@ -14,18 +15,21 @@ use provider_stack_persistence::OperationsBundleRepo;
 use provider_stack_sdk::channel::fetch_utxo_balances;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
-use soroban_client::{keypair::KeypairBehavior, Options, Server};
+use soroban_client::{Options, Server};
 use uuid::Uuid;
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SubmitReq {
+    #[serde(rename = "operationsMLXDR")]
     pub operations_mlxdr: JsonValue,
     pub channel_contract_id: Option<String>,
 }
 
 #[derive(Serialize)]
-pub struct SubmitRes {
-    pub bundle_id: String,
+#[serde(rename_all = "camelCase")]
+pub struct SubmitPayload {
+    pub operations_bundle_id: String,
     pub status: &'static str,
 }
 
@@ -41,7 +45,7 @@ pub async fn post_submit(
     let op_count = operations_mlxdr.as_array().map(|a| a.len()).unwrap_or(0);
     if op_count == 0 {
         return Err(ApiError::BadRequest(
-            "operations_mlxdr must contain at least one operation".into(),
+            "operationsMLXDR must contain at least one operation".into(),
         ));
     }
     if op_count > state.config.bundle_max_operations {
@@ -53,14 +57,14 @@ pub async fn post_submit(
 
     // Classify by MLXDR type byte.
     let (classified, spend_utxos) = classify_bundle(&operations_mlxdr)
-        .map_err(|e| ApiError::BadRequest(format!("operations_mlxdr: {e}")))?;
+        .map_err(|e| ApiError::BadRequest(format!("operationsMLXDR: {e}")))?;
 
     // Fetch on-chain balances for Spend UTXOs (if any).
     let spend_balances: Vec<i128> = if !spend_utxos.is_empty() {
         let channel = channel_contract_id
             .as_deref()
             .ok_or_else(|| ApiError::BadRequest(
-                "channel_contract_id is required when bundle contains Spend ops".into(),
+                "channelContractId is required when bundle contains Spend ops".into(),
             ))?;
         let server = Server::new(
             &state.config.stellar_rpc_url,
@@ -74,9 +78,6 @@ pub async fn post_submit(
             "{}",
             stellar_strkey::ed25519::PublicKey(signing.verifying_key().to_bytes())
         );
-        // Use a soroban-client Keypair purely for its strkey roundtrip (Account::new needs the
-        // strkey, which we already have). The simulate doesn't actually validate the source.
-        let _ = soroban_client::keypair::Keypair::from_secret(&state.config.pp_secret_key);
         fetch_utxo_balances(
             &server,
             channel,
@@ -113,10 +114,16 @@ pub async fn post_submit(
     )
     .await?;
 
-    Ok(HttpResponse::Created().json(SubmitRes {
-        bundle_id: id,
+    Ok(HttpResponse::Created().json(Data::new(SubmitPayload {
+        operations_bundle_id: id,
         status: "PENDING",
-    }))
+    })))
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EntityBundlesList {
+    pub bundles: Vec<JsonValue>,
 }
 
 #[get("/providers/{pk}/entity/bundles")]
@@ -125,7 +132,23 @@ pub async fn list_entity(
     _auth: EntityAuth,
     _path: web::Path<String>,
 ) -> Result<impl Responder, ApiError> {
-    Ok::<_, ApiError>(HttpResponse::Ok().json(serde_json::json!({ "bundles": [] })))
+    Ok::<_, ApiError>(
+        HttpResponse::Ok().json(Data::new(EntityBundlesList { bundles: vec![] })),
+    )
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BundleDetail {
+    pub id: String,
+    pub status: String,
+    pub fee: String,
+    pub ttl: String,
+    #[serde(rename = "operationsMLXDR")]
+    pub operations_mlxdr: JsonValue,
+    pub created_at: String,
+    pub updated_at: Option<String>,
+    pub failure_detail: Option<JsonValue>,
 }
 
 #[get("/providers/{pk}/entity/bundles/{bundle_id}")]
@@ -137,7 +160,19 @@ pub async fn get_entity_bundle(
     let (_pk, bundle_id) = path.into_inner();
     let repo = OperationsBundleRepo::new(state.pool.clone());
     match repo.find_by_id(&bundle_id).await? {
-        Some(b) => Ok(HttpResponse::Ok().json(b)),
+        Some(b) => {
+            let detail = BundleDetail {
+                id: b.id,
+                status: format!("{:?}", b.status).to_uppercase(),
+                fee: b.fee.to_string(),
+                ttl: b.ttl.to_rfc3339(),
+                operations_mlxdr: b.operations_mlxdr,
+                created_at: b.created_at.to_rfc3339(),
+                updated_at: Some(b.updated_at.to_rfc3339()),
+                failure_detail: b.failure_detail,
+            };
+            Ok(HttpResponse::Ok().json(Data::new(detail)))
+        }
         None => Err(ApiError::NotFound),
     }
 }

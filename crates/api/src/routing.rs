@@ -10,6 +10,8 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
             .service(routes::health::get_health)
             .service(routes::auth_dashboard::post_challenge)
             .service(routes::auth_dashboard::post_verify)
+            .service(routes::dashboard_pp::post_register)
+            .service(routes::dashboard_pp::get_list)
             .service(routes::auth_stellar::get_challenge)
             .service(routes::auth_stellar::post_verify)
             .service(routes::entities::post_challenge)

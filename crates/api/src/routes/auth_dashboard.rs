@@ -1,5 +1,9 @@
 //! SEP-43 dashboard (operator) auth.
+//!
+//! Wire shapes match the Deno reference (provider-platform): camelCase fields, success
+//! responses wrapped in `{ data: ... }`.
 
+use crate::envelope::Data;
 use crate::error::ApiError;
 use crate::state::AppState;
 use actix_web::{post, web, HttpResponse, Responder};
@@ -8,12 +12,14 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ChallengeReq {
     pub public_key: String,
 }
 
 #[derive(Serialize)]
-pub struct ChallengeRes {
+#[serde(rename_all = "camelCase")]
+pub struct ChallengePayload {
     pub nonce: String,
 }
 
@@ -27,10 +33,11 @@ pub async fn post_challenge(
         return Err(ApiError::Forbidden);
     }
     let nonce = state.nonces.issue(&body.public_key);
-    Ok(HttpResponse::Ok().json(ChallengeRes { nonce }))
+    Ok(HttpResponse::Ok().json(Data::new(ChallengePayload { nonce })))
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct VerifyReq {
     pub public_key: String,
     pub nonce: String,
@@ -38,7 +45,8 @@ pub struct VerifyReq {
 }
 
 #[derive(Serialize)]
-pub struct VerifyRes {
+#[serde(rename_all = "camelCase")]
+pub struct VerifyPayload {
     pub token: String,
 }
 
@@ -64,5 +72,5 @@ pub async fn post_verify(
         &Uuid::new_v4().to_string(),
         state.config.session_ttl.as_secs() as i64,
     )?;
-    Ok(HttpResponse::Ok().json(VerifyRes { token }))
+    Ok(HttpResponse::Ok().json(Data::new(VerifyPayload { token })))
 }

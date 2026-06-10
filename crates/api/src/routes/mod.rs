@@ -2,6 +2,7 @@ pub mod auth_dashboard;
 pub mod auth_stellar;
 pub mod bundles;
 pub mod council;
+pub mod dashboard_pp;
 pub mod entities;
 pub mod events;
 pub mod health;
