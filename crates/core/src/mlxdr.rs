@@ -21,7 +21,9 @@
 
 use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine;
-use soroban_client::xdr::{Limits, ReadXdr, ScVal};
+use soroban_client::xdr::{
+    AccountId, Limits, PublicKey, ReadXdr, ScAddress, ScVal, SorobanAuthorizationEntry, Uint256,
+};
 use thiserror::Error;
 
 const ML_PREFIX: [u8; 2] = [0x30, 0xb0];
@@ -163,6 +165,339 @@ pub struct Classified {
     pub spend: Vec<DecodedOperation>,
     pub deposit: Vec<DecodedOperation>,
     pub withdraw: Vec<DecodedOperation>,
+}
+
+/// Aggregate MLXDR slots into a single `ChannelOperation` ScVal — the argument the
+/// privacy-channel contract's `transact(op: ChannelOperation)` entrypoint expects.
+///
+/// `ChannelOperation` is a Soroban `#[contracttype]` struct with four `Vec<...>` fields:
+///   - `create`:   `Vec<(BytesN<65>, i128)>`
+///   - `deposit`:  `Vec<(Address, i128, Vec<Condition>)>`
+///   - `spend`:    `Vec<(BytesN<65>, Vec<Condition>)>`
+///   - `withdraw`: `Vec<(Address, i128, Vec<Condition>)>`
+///
+/// In ScVal, the struct is `ScMap` keyed by symbol field name (alphabetic order), each
+/// value an `ScVec` of tuple-ScVecs. Every MLXDR slot's *operation payload* (the first
+/// element of the outer ScVec) is already shaped as the matching tuple — so we extract
+/// it verbatim and push it into the bucket for its type byte.
+/// One user-pre-signed Soroban auth entry lifted out of an MLXDR slot.
+///
+/// Each Deposit / Withdraw MLXDR slot carries the depositor's pre-built
+/// `SorobanAuthorizationEntry` in `outer_scvec[1]`. The user built it via
+/// `MoonlightOperation.signWithEd25519` on the client (see
+/// `moonlight-sdk/src/operation/index.ts:518`), committing to a specific
+/// nonce + signature_expiration_ledger and signing the matching preimage.
+/// The provider must relay it verbatim — recomputing the preimage with a
+/// different nonce would invalidate the signature.
+#[derive(Debug, Clone)]
+pub struct UserSignedSlot {
+    /// 32-byte Ed25519 pubkey of the depositor / withdrawer.
+    pub account_pk32: [u8; 32],
+    /// The user-signed authorization entry, ready to splice into
+    /// `InvokeHostFunctionOp.auth`.
+    pub auth_entry: SorobanAuthorizationEntry,
+}
+
+/// Extract every user-pre-signed `SorobanAuthorizationEntry` from a bundle's
+/// MLXDR slots. Mirrors the Deno SDK's `_extSignatures` map at
+/// `moonlight-sdk/src/transaction-builder/index.ts:64`.
+///
+/// Slot signature shape (from `moonlight-sdk/src/custom-xdr/index.ts:155-173`):
+/// - Deposit / Withdraw signed:   `ScVal::Vec([ScVal::Bytes(<raw XDR of SorobanAuthorizationEntry>)])`
+/// - Anything else (Create, unsigned, UTXO P256 sig for Spend): skipped here.
+pub fn extract_user_signed_entries(
+    mlxdr_strings: &[&str],
+) -> Result<Vec<UserSignedSlot>, MlxdrError> {
+    let mut out: Vec<UserSignedSlot> = Vec::new();
+    for s in mlxdr_strings {
+        let bytes = B64.decode(s).map_err(|e| MlxdrError::Base64(e.to_string()))?;
+        if bytes.len() < 3 {
+            return Err(MlxdrError::TooShort);
+        }
+        if bytes[0..2] != ML_PREFIX {
+            return Err(MlxdrError::MissingPrefix);
+        }
+        let kind = OperationKind::from_type_byte(bytes[2])?;
+        if !matches!(kind, OperationKind::Deposit | OperationKind::Withdraw) {
+            continue;
+        }
+        let outer = ScVal::from_xdr(&bytes[3..], Limits::none())
+            .map_err(|e| MlxdrError::Xdr(e.to_string()))?;
+        let scvec = match outer {
+            ScVal::Vec(Some(v)) => v.0,
+            _ => return Err(MlxdrError::BadShape("outer must be ScVec(Some(..))")),
+        };
+        if scvec.len() < 2 {
+            continue;
+        }
+        // scvec[1] is the signature wrapper. For a signed Ed25519 deposit:
+        // ScVal::Vec([ScVal::Bytes(<raw SorobanAuthorizationEntry XDR>)]).
+        let sig_vec = match &scvec[1] {
+            ScVal::Vec(Some(v)) if !v.0.is_empty() => v.0.clone(),
+            _ => continue,
+        };
+        let entry_bytes = match &sig_vec[0] {
+            ScVal::Bytes(b) => b.0.as_slice().to_vec(),
+            _ => continue,
+        };
+        let auth_entry = SorobanAuthorizationEntry::from_xdr(&entry_bytes, Limits::none())
+            .map_err(|e| MlxdrError::Xdr(format!("user-signed auth entry XDR: {e}")))?;
+
+        // Depositor pubkey lives in scvec[0] payload[0] as ScAddress::Account(ed25519).
+        let payload = match &scvec[0] {
+            ScVal::Vec(Some(v)) => v.0.clone(),
+            _ => return Err(MlxdrError::BadShape("op payload must be Vec")),
+        };
+        if payload.is_empty() {
+            return Err(MlxdrError::BadShape("op payload empty"));
+        }
+        let account_pk32 = match &payload[0] {
+            ScVal::Address(ScAddress::Account(AccountId(PublicKey::PublicKeyTypeEd25519(
+                Uint256(bytes),
+            )))) => *bytes,
+            _ => continue,
+        };
+        out.push(UserSignedSlot {
+            account_pk32,
+            auth_entry,
+        });
+    }
+    Ok(out)
+}
+
+/// One UTXO-spend P256 signature lifted out of a Spend MLXDR slot.
+///
+/// Spend slots carry the UTXO owner's pre-signed P256 signature over the
+/// channel-auth contract's `AuthPayload` (conditions + live_until_ledger).
+/// The provider must add a matching `{ SignerKey::P256(utxo) → (Signature::P256(sig), exp) }`
+/// entry to the channel-auth `Signatures` map alongside the Provider entry —
+/// mirrors moonlight-sdk's `buildSignaturesXDR` spend-signers loop at
+/// `moonlight-sdk/src/transaction-builder/signatures/signatures-xdr.ts:26-46`.
+#[derive(Debug, Clone)]
+pub struct UserSpendSignature {
+    /// 65-byte UTXO public key (P-256 uncompressed point form).
+    pub utxo_pk65: [u8; 65],
+    /// 64-byte P-256 signature over the per-spend AuthPayload hash.
+    pub sig: [u8; 64],
+    /// Ledger expiration the signer committed to (becomes the u32 in `(Signature, u32)`).
+    pub exp: u32,
+}
+
+/// Extract every UTXO-spend P256 signature from a bundle's Spend MLXDR slots.
+///
+/// Slot signature shape (from `moonlight-sdk/src/custom-xdr/index.ts:166-169`):
+/// `ScVal::Vec([ScVal::I128(exp), ScVal::Bytes(sig)])`.
+pub fn extract_user_spend_signatures(
+    mlxdr_strings: &[&str],
+) -> Result<Vec<UserSpendSignature>, MlxdrError> {
+    use soroban_client::xdr::Int128Parts;
+    let mut out: Vec<UserSpendSignature> = Vec::new();
+    for s in mlxdr_strings {
+        let bytes = B64.decode(s).map_err(|e| MlxdrError::Base64(e.to_string()))?;
+        if bytes.len() < 3 {
+            return Err(MlxdrError::TooShort);
+        }
+        if bytes[0..2] != ML_PREFIX {
+            return Err(MlxdrError::MissingPrefix);
+        }
+        let kind = OperationKind::from_type_byte(bytes[2])?;
+        if !matches!(kind, OperationKind::Spend) {
+            continue;
+        }
+        let outer = ScVal::from_xdr(&bytes[3..], Limits::none())
+            .map_err(|e| MlxdrError::Xdr(e.to_string()))?;
+        let scvec = match outer {
+            ScVal::Vec(Some(v)) => v.0,
+            _ => return Err(MlxdrError::BadShape("outer must be ScVec(Some(..))")),
+        };
+        if scvec.len() < 2 {
+            continue;
+        }
+        // scvec[1] = [ScVal::I128(exp), ScVal::Bytes(sig)]
+        let sig_vec = match &scvec[1] {
+            ScVal::Vec(Some(v)) if v.0.len() >= 2 => v.0.clone(),
+            _ => continue,
+        };
+        let exp_u32 = match &sig_vec[0] {
+            ScVal::I128(Int128Parts { lo, .. }) => (*lo & 0xFFFF_FFFF) as u32,
+            _ => continue,
+        };
+        let sig_bytes = match &sig_vec[1] {
+            ScVal::Bytes(b) => b.0.as_slice().to_vec(),
+            _ => continue,
+        };
+        if sig_bytes.len() != 64 {
+            continue;
+        }
+        let mut sig = [0u8; 64];
+        sig.copy_from_slice(&sig_bytes);
+
+        // scvec[0] = op payload [ScBytes(utxo:65), ScVec(conditions)]
+        let payload = match &scvec[0] {
+            ScVal::Vec(Some(v)) => v.0.clone(),
+            _ => return Err(MlxdrError::BadShape("Spend payload must be Vec")),
+        };
+        let utxo_bytes = match payload.first() {
+            Some(ScVal::Bytes(b)) => b.0.as_slice().to_vec(),
+            _ => continue,
+        };
+        if utxo_bytes.len() != 65 {
+            continue;
+        }
+        let mut utxo_pk65 = [0u8; 65];
+        utxo_pk65.copy_from_slice(&utxo_bytes);
+
+        out.push(UserSpendSignature {
+            utxo_pk65,
+            sig,
+            exp: exp_u32,
+        });
+    }
+    Ok(out)
+}
+
+/// Build an extra `Create` operation tuple to inject as the PP's fee UTXO.
+/// The privacy channel contract enforces `total_deposit + spend = total_create + total_withdraw`;
+/// the difference (the fee) has to land somewhere or it's `UnbalancedBundle`. The Deno reference
+/// creates a fresh OPEX UTXO under the PP's control for exactly this amount.
+///
+/// `utxo_pubkey` must be 65 bytes (P-256 uncompressed point shape: `0x04 || X || Y`).
+pub fn build_fee_create_op(utxo_pubkey: &[u8; 65], fee: i128) -> Result<ScVal, MlxdrError> {
+    use soroban_client::xdr::{Int128Parts, ScBytes, ScVec, VecM};
+    let utxo_bytes: soroban_client::xdr::BytesM = utxo_pubkey
+        .to_vec()
+        .try_into()
+        .map_err(|e: soroban_client::xdr::Error| MlxdrError::Xdr(format!("BytesM utxo: {e}")))?;
+    let amount = Int128Parts {
+        hi: ((fee as i128) >> 64) as i64,
+        lo: ((fee as u128) & 0xFFFF_FFFF_FFFF_FFFF) as u64,
+    };
+    let tuple = vec![ScVal::Bytes(ScBytes(utxo_bytes)), ScVal::I128(amount)];
+    let vecm: VecM<ScVal> = VecM::try_from(tuple)
+        .map_err(|e| MlxdrError::Xdr(format!("VecM fee tuple: {e}")))?;
+    Ok(ScVal::Vec(Some(ScVec(vecm))))
+}
+
+/// Like [`aggregate_to_channel_operation`] but also appends an extra Create op
+/// (typically the PP's fee UTXO) to the create bucket so the bundle balances on-chain.
+pub fn aggregate_to_channel_operation_with_fee_create(
+    mlxdr_strings: &[&str],
+    extra_create: ScVal,
+) -> Result<ScVal, MlxdrError> {
+    use soroban_client::xdr::{ScMap, ScMapEntry, ScSymbol, ScVec, StringM, VecM};
+
+    let mut create_ops: Vec<ScVal> = Vec::new();
+    let mut deposit_ops: Vec<ScVal> = Vec::new();
+    let mut spend_ops: Vec<ScVal> = Vec::new();
+    let mut withdraw_ops: Vec<ScVal> = Vec::new();
+
+    for s in mlxdr_strings {
+        let bytes = B64.decode(s).map_err(|e| MlxdrError::Base64(e.to_string()))?;
+        if bytes.len() < 3 {
+            return Err(MlxdrError::TooShort);
+        }
+        if bytes[0..2] != ML_PREFIX {
+            return Err(MlxdrError::MissingPrefix);
+        }
+        let kind = OperationKind::from_type_byte(bytes[2])?;
+        let outer = ScVal::from_xdr(&bytes[3..], Limits::none())
+            .map_err(|e| MlxdrError::Xdr(e.to_string()))?;
+        let scvec = match outer {
+            ScVal::Vec(Some(v)) => v.0,
+            _ => return Err(MlxdrError::BadShape("outer must be ScVec(Some(..))")),
+        };
+        if scvec.is_empty() {
+            return Err(MlxdrError::BadShape("outer ScVec is empty"));
+        }
+        let op_scval = scvec[0].clone();
+        match kind {
+            OperationKind::Create => create_ops.push(op_scval),
+            OperationKind::Deposit => deposit_ops.push(op_scval),
+            OperationKind::Spend => spend_ops.push(op_scval),
+            OperationKind::Withdraw => withdraw_ops.push(op_scval),
+        }
+    }
+    create_ops.push(extra_create);
+
+    fn vec_of(ops: Vec<ScVal>) -> Result<ScVal, MlxdrError> {
+        let vecm: VecM<ScVal> = VecM::try_from(ops)
+            .map_err(|e| MlxdrError::Xdr(format!("VecM build: {e}")))?;
+        Ok(ScVal::Vec(Some(ScVec(vecm))))
+    }
+    fn sym(s: &'static str) -> Result<ScVal, MlxdrError> {
+        let strm: StringM<32> = StringM::try_from(s.as_bytes().to_vec())
+            .map_err(|e| MlxdrError::Xdr(format!("Symbol build: {e}")))?;
+        Ok(ScVal::Symbol(ScSymbol(strm)))
+    }
+
+    let entries = vec![
+        ScMapEntry { key: sym("create")?,   val: vec_of(create_ops)? },
+        ScMapEntry { key: sym("deposit")?,  val: vec_of(deposit_ops)? },
+        ScMapEntry { key: sym("spend")?,    val: vec_of(spend_ops)? },
+        ScMapEntry { key: sym("withdraw")?, val: vec_of(withdraw_ops)? },
+    ];
+    let map: VecM<ScMapEntry> = VecM::try_from(entries)
+        .map_err(|e| MlxdrError::Xdr(format!("ScMap build: {e}")))?;
+    Ok(ScVal::Map(Some(ScMap(map))))
+}
+
+pub fn aggregate_to_channel_operation(mlxdr_strings: &[&str]) -> Result<ScVal, MlxdrError> {
+    use soroban_client::xdr::{ScMap, ScMapEntry, ScSymbol, ScVec, StringM, VecM};
+
+    let mut create_ops: Vec<ScVal> = Vec::new();
+    let mut deposit_ops: Vec<ScVal> = Vec::new();
+    let mut spend_ops: Vec<ScVal> = Vec::new();
+    let mut withdraw_ops: Vec<ScVal> = Vec::new();
+
+    for s in mlxdr_strings {
+        let bytes = B64.decode(s).map_err(|e| MlxdrError::Base64(e.to_string()))?;
+        if bytes.len() < 3 {
+            return Err(MlxdrError::TooShort);
+        }
+        if bytes[0..2] != ML_PREFIX {
+            return Err(MlxdrError::MissingPrefix);
+        }
+        let kind = OperationKind::from_type_byte(bytes[2])?;
+        let outer = ScVal::from_xdr(&bytes[3..], Limits::none())
+            .map_err(|e| MlxdrError::Xdr(e.to_string()))?;
+        let scvec = match outer {
+            ScVal::Vec(Some(v)) => v.0,
+            _ => return Err(MlxdrError::BadShape("outer must be ScVec(Some(..))")),
+        };
+        if scvec.is_empty() {
+            return Err(MlxdrError::BadShape("outer ScVec is empty"));
+        }
+        let op_scval = scvec[0].clone();
+        match kind {
+            OperationKind::Create => create_ops.push(op_scval),
+            OperationKind::Deposit => deposit_ops.push(op_scval),
+            OperationKind::Spend => spend_ops.push(op_scval),
+            OperationKind::Withdraw => withdraw_ops.push(op_scval),
+        }
+    }
+
+    fn vec_of(ops: Vec<ScVal>) -> Result<ScVal, MlxdrError> {
+        let vecm: VecM<ScVal> = VecM::try_from(ops)
+            .map_err(|e| MlxdrError::Xdr(format!("VecM build: {e}")))?;
+        Ok(ScVal::Vec(Some(ScVec(vecm))))
+    }
+
+    fn sym(s: &'static str) -> Result<ScVal, MlxdrError> {
+        let strm: StringM<32> = StringM::try_from(s.as_bytes().to_vec())
+            .map_err(|e| MlxdrError::Xdr(format!("Symbol build: {e}")))?;
+        Ok(ScVal::Symbol(ScSymbol(strm)))
+    }
+
+    // Keys must be in lexicographic order: create < deposit < spend < withdraw.
+    let entries = vec![
+        ScMapEntry { key: sym("create")?,   val: vec_of(create_ops)? },
+        ScMapEntry { key: sym("deposit")?,  val: vec_of(deposit_ops)? },
+        ScMapEntry { key: sym("spend")?,    val: vec_of(spend_ops)? },
+        ScMapEntry { key: sym("withdraw")?, val: vec_of(withdraw_ops)? },
+    ];
+    let map: VecM<ScMapEntry> = VecM::try_from(entries)
+        .map_err(|e| MlxdrError::Xdr(format!("ScMap build: {e}")))?;
+    Ok(ScVal::Map(Some(ScMap(map))))
 }
 
 pub fn classify(mlxdr_strings: &[&str]) -> Result<Classified, MlxdrError> {

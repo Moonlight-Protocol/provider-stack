@@ -28,7 +28,7 @@ pub async fn run_server() -> Result<()> {
     let pool = connect(&config.database_url).await?;
     run_migrations(&pool).await?;
 
-    let events = EventBroadcaster::default();
+    let events = EventBroadcaster::new(256, config.operator_public_key.clone());
     let nonces = Arc::new(NonceStore::new(config.challenge_ttl));
 
     let state = state::AppState {
@@ -65,10 +65,61 @@ pub async fn run_server() -> Result<()> {
 }
 
 pub fn init_tracing() {
+    use opentelemetry::trace::TracerProvider as _;
+    use opentelemetry::KeyValue;
+    use opentelemetry_otlp::{WithExportConfig, WithHttpConfig};
+    use opentelemetry_sdk::propagation::TraceContextPropagator;
+    use opentelemetry_sdk::Resource;
+
+    // Install the W3C `traceparent` propagator so `tracing-actix-web` can
+    // extract incoming HTTP trace IDs and the spans we emit become children
+    // of the SDK-side root span — the OTEL verify check that gates Suite 2.
+    opentelemetry::global::set_text_map_propagator(TraceContextPropagator::new());
+
     let env_filter =
         EnvFilter::try_from_env("LOG_LEVEL").unwrap_or_else(|_| EnvFilter::new("info"));
-    let _ = tracing_subscriber::registry()
-        .with(env_filter)
-        .with(fmt::layer().json())
-        .try_init();
+
+    // OTLP exporter — endpoint set by OTEL_EXPORTER_OTLP_ENDPOINT, service name by
+    // OTEL_SERVICE_NAME (the verify-otel-local.ts script filters by serviceName).
+    let otlp_endpoint = std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT")
+        .unwrap_or_else(|_| "http://localhost:4318".into());
+    let service_name = std::env::var("OTEL_SERVICE_NAME")
+        .unwrap_or_else(|_| "provider-platform".into());
+    let otel_layer = match opentelemetry_otlp::SpanExporter::builder()
+        .with_http()
+        .with_endpoint(format!("{otlp_endpoint}/v1/traces"))
+        .with_protocol(opentelemetry_otlp::Protocol::HttpBinary)
+        .with_http_client(reqwest::Client::new())
+        .build()
+    {
+        Ok(exporter) => {
+            // Use the async-runtime batch processor with Tokio so reqwest's async
+            // export doesn't block actix workers (which `with_simple_exporter`
+            // does, causing the request-handler thread pool to starve).
+            use opentelemetry_sdk::runtime;
+            use opentelemetry_sdk::trace::span_processor_with_async_runtime::BatchSpanProcessor;
+            let batch = BatchSpanProcessor::builder(exporter, runtime::Tokio).build();
+            let provider = opentelemetry_sdk::trace::SdkTracerProvider::builder()
+                .with_span_processor(batch)
+                .with_resource(
+                    Resource::builder()
+                        .with_attribute(KeyValue::new("service.name", service_name.clone()))
+                        .build(),
+                )
+                .build();
+            opentelemetry::global::set_tracer_provider(provider.clone());
+            Some(tracing_opentelemetry::layer().with_tracer(provider.tracer("provider-stack")))
+        }
+        Err(e) => {
+            eprintln!("[init_tracing] otlp exporter init failed: {e}; continuing without OTEL");
+            None
+        }
+    };
+
+    let registry = tracing_subscriber::registry().with(env_filter).with(fmt::layer().json());
+    let _ = if let Some(layer) = otel_layer {
+        registry.with(layer).try_init()
+    } else {
+        registry.try_init()
+    };
 }

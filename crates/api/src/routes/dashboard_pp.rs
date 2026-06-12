@@ -1,10 +1,10 @@
 //! `/api/v1/dashboard/pp/register` and `/api/v1/dashboard/pp/list` compat shims.
 //!
-//! Provider-platform exposes a multi-PP-per-operator surface. The Rust stack is
-//! internally single-PP (key from env), so these endpoints accept the SaaS-shape
-//! request bodies and return the single configured PP. Register accepts
-//! `{ secretKey, derivationIndex?, label? }`, validates the derived public key
-//! matches the env-configured PP, and rejects mismatches with 400.
+//! Per PLAN.md the Rust stack is single-PP (one operator per deployment, signing
+//! key in `PP_SECRET_KEY` env). These endpoints exist solely for wire-compat with
+//! Deno provider-platform's multi-PP shape: register validates that the supplied
+//! `secretKey` derives to the env-configured PP and 400s on mismatch; list returns
+//! the single configured PP.
 
 use crate::envelope::Data;
 use crate::error::ApiError;
@@ -69,6 +69,9 @@ pub async fn post_register(
              this stack only registers its own PP"
         )));
     }
+    // Drive the per-PP scope label that the events broadcaster stamps onto every
+    // emitted event — the harness asserts `scope.ppLabel == "Testnet E2E PP"`.
+    state.events.set_label(body.label.clone());
     let record = PpRecord {
         id: env_pp.clone(),
         public_key: env_pp,

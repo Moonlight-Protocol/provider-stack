@@ -34,6 +34,7 @@ pub struct SubmitPayload {
 }
 
 #[post("/providers/{pk}/entity/bundles")]
+#[tracing::instrument(name = "P_AddOperationsBundle", skip_all)]
 pub async fn post_submit(
     state: web::Data<AppState>,
     auth: EntityAuth,
@@ -55,9 +56,14 @@ pub async fn post_submit(
         )));
     }
 
+    tracing::info!(op_count, "bundle submission accepted");
     // Classify by MLXDR type byte.
-    let (classified, spend_utxos) = classify_bundle(&operations_mlxdr)
-        .map_err(|e| ApiError::BadRequest(format!("operationsMLXDR: {e}")))?;
+    let (classified, spend_utxos) = {
+        let _span = tracing::info_span!("Bundle.classify").entered();
+        tracing::info!("classifying MLXDR slots");
+        classify_bundle(&operations_mlxdr)
+            .map_err(|e| ApiError::BadRequest(format!("operationsMLXDR: {e}")))?
+    };
 
     // Fetch on-chain balances for Spend UTXOs (if any).
     let spend_balances: Vec<i128> = if !spend_utxos.is_empty() {
@@ -92,7 +98,11 @@ pub async fn post_submit(
     };
 
     // Derive bundle fee per the provider-platform formula.
-    let fee_i128 = derive_fee_from_classified(&classified, &spend_balances);
+    let fee_i128 = {
+        let _span = tracing::info_span!("Bundle.fee").entered();
+        tracing::info!("deriving bundle fee");
+        derive_fee_from_classified(&classified, &spend_balances)
+    };
     let fee: i64 = fee_i128
         .try_into()
         .map_err(|_| ApiError::Internal("fee overflows i64".into()))?;
@@ -101,6 +111,8 @@ pub async fn post_submit(
     let bundle_id = Uuid::new_v4().to_string();
     let ttl = Utc::now() + Duration::hours(24);
 
+    let _span = tracing::info_span!("Bundle.persist").entered();
+    tracing::info!("persisting PENDING bundle row");
     let id = add_bundle(
         &repo,
         AddBundleInput {

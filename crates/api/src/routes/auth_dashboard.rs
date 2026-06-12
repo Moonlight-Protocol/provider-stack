@@ -24,15 +24,21 @@ pub struct ChallengePayload {
 }
 
 #[post("/dashboard/auth/challenge")]
+#[tracing::instrument(name = "P_CreateChallenge", skip_all)]
 pub async fn post_challenge(
     state: web::Data<AppState>,
     body: web::Json<ChallengeReq>,
 ) -> Result<impl Responder, ApiError> {
-    // Reject any non-operator pubkey up front — no point issuing a nonce we'll reject on verify.
     if body.public_key != state.config.operator_public_key {
         return Err(ApiError::Forbidden);
     }
-    let nonce = state.nonces.issue(&body.public_key);
+    tracing::info!(public_key = %body.public_key, "dashboard challenge requested");
+    let nonce = {
+        let _s = tracing::info_span!("P_CreateChallengeMemory").entered();
+        tracing::info!("issuing nonce");
+        state.nonces.issue(&body.public_key)
+    };
+    tracing::info!(public_key = %body.public_key, "challenge issued");
     Ok(HttpResponse::Ok().json(Data::new(ChallengePayload { nonce })))
 }
 
@@ -51,6 +57,7 @@ pub struct VerifyPayload {
 }
 
 #[post("/dashboard/auth/verify")]
+#[tracing::instrument(name = "P_VerifyChallenge", skip_all)]
 pub async fn post_verify(
     state: web::Data<AppState>,
     body: web::Json<VerifyReq>,
@@ -58,12 +65,21 @@ pub async fn post_verify(
     if body.public_key != state.config.operator_public_key {
         return Err(ApiError::Forbidden);
     }
-    if !state.nonces.consume(&body.nonce, &body.public_key) {
+    tracing::info!(public_key = %body.public_key, "dashboard challenge verify started");
+    let consumed = {
+        let _s = tracing::info_span!("P_CompareChallenge").entered();
+        tracing::info!("consuming nonce");
+        state.nonces.consume(&body.nonce, &body.public_key)
+    };
+    if !consumed {
         return Err(ApiError::Unauthorized);
     }
+    tracing::info!(public_key = %body.public_key, "challenge verified");
     sep43::verify_signature(&body.public_key, &body.nonce, &body.signature)
         .map_err(|_| ApiError::Unauthorized)?;
 
+    let _jwt_span = tracing::info_span!("P_GenerateChallengeJWT").entered();
+    tracing::info!("minting operator JWT");
     let token = mint_token(
         state.config.service_auth_secret.as_bytes(),
         &state.config.service_domain,

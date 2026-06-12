@@ -105,7 +105,7 @@ async fn boot_server() -> (u16, EventBroadcaster, actix_web::dev::ServerHandle) 
     listener.set_nonblocking(true).unwrap();
     let port = listener.local_addr().unwrap().port();
 
-    let events = EventBroadcaster::default();
+    let events = EventBroadcaster::new(256, "GTESTPP".to_string());
     let state = make_state(events.clone());
 
     let server = HttpServer::new(move || {

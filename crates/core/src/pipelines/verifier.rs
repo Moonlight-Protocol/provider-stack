@@ -9,7 +9,7 @@
 //! The loop is gated by a `Mutex<bool>` so overlapping ticks collapse safely.
 
 use crate::config::Config;
-use crate::events::{EventBroadcaster, ProviderEvent};
+use crate::events::{summarize_bundle, EventBroadcaster, ProviderEvent};
 use provider_stack_persistence::{
     BundleStatus, BundleTransactionRepo, OperationsBundleRepo, PgPool, TransactionRepo,
     TransactionStatus,
@@ -19,10 +19,13 @@ use soroban_client::{Options, Server};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::time::{interval, MissedTickBehavior};
-use tracing::{debug, instrument, warn};
+use tracing::{debug, instrument, warn, Instrument};
 
 #[instrument(skip_all, name = "pipeline.verifier")]
 pub async fn run(config: Arc<Config>, pool: PgPool, events: EventBroadcaster) {
+    let cheap = config.mempool.cheap_op_weight as u32;
+    let expensive = config.mempool.expensive_op_weight as u32;
+    let _ = (cheap, expensive);
     let server = match Server::new(
         &config.stellar_rpc_url,
         Options {
@@ -50,7 +53,8 @@ pub async fn run(config: Arc<Config>, pool: PgPool, events: EventBroadcaster) {
         *guard = true;
         drop(guard);
 
-        if let Err(e) = run_tick(&server, &pool, &events).await {
+        let tick_span = tracing::info_span!("Verifier.tick");
+        if let Err(e) = run_tick(&server, &pool, &events, &config).instrument(tick_span).await {
             warn!(error = %e, "verifier tick failed");
         }
         debug!("verifier tick complete");
@@ -65,10 +69,14 @@ pub async fn run_tick(
     server: &Server,
     pool: &PgPool,
     events: &EventBroadcaster,
+    config: &Config,
 ) -> anyhow::Result<()> {
     let tx_repo = TransactionRepo::new(pool.clone());
     let bundle_link = BundleTransactionRepo::new(pool.clone());
     let bundle_repo = OperationsBundleRepo::new(pool.clone());
+
+    let cheap = config.mempool.cheap_op_weight as u32;
+    let expensive = config.mempool.expensive_op_weight as u32;
 
     let unverified = tx_repo.list_unverified(64).await?;
     for tx in unverified {
@@ -84,12 +92,69 @@ pub async fn run_tick(
         match resp.status {
             RpcStatus::Success => {
                 tx_repo.set_status(&tx.id, TransactionStatus::Verified).await?;
+
+                // One verifier.bundle_completed event for the whole tx batch,
+                // then a kind-specific bundle.{deposit,withdraw}_completed event
+                // per bundle if its primary flow has an external counterparty.
+                let scope = events.current_scope();
+                let channel_id = match bundle_ids.first() {
+                    Some(bid) => match bundle_repo.find_by_id(bid).await? {
+                        Some(b) => b.channel_contract_id.clone(),
+                        None => None,
+                    },
+                    None => None,
+                };
+                events.send(ProviderEvent::verifier_bundle_completed(
+                    scope.clone(),
+                    &tx.id,
+                    &bundle_ids,
+                    channel_id.as_deref(),
+                ));
+
                 for bid in &bundle_ids {
                     bundle_repo.set_status(bid, BundleStatus::Completed).await?;
-                    events.send(ProviderEvent::BundleCompleted {
-                        bundle_id: bid.clone(),
-                        tx_hash: tx.id.clone(),
-                    });
+                    let Some(bundle) = bundle_repo.find_by_id(bid).await? else {
+                        continue;
+                    };
+                    let summary = match summarize_bundle(
+                        &bundle.operations_mlxdr,
+                        cheap,
+                        expensive,
+                    ) {
+                        Ok(s) => s,
+                        Err(e) => {
+                            warn!(bundle = %bid, error = %e, "verifier: summarize failed");
+                            continue;
+                        }
+                    };
+                    let amount = summary.primary_amount.clone().unwrap_or_default();
+                    match summary.primary_kind {
+                        "deposit" => {
+                            if let Some(addr) = summary.depositor_address {
+                                events.send(ProviderEvent::bundle_deposit_completed(
+                                    scope.clone(),
+                                    bid,
+                                    &tx.id,
+                                    bundle.channel_contract_id.as_deref(),
+                                    &addr,
+                                    &amount,
+                                ));
+                            }
+                        }
+                        "withdraw" => {
+                            if let Some(addr) = summary.recipient_address {
+                                events.send(ProviderEvent::bundle_withdraw_completed(
+                                    scope.clone(),
+                                    bid,
+                                    &tx.id,
+                                    bundle.channel_contract_id.as_deref(),
+                                    &addr,
+                                    &amount,
+                                ));
+                            }
+                        }
+                        _ => {}
+                    }
                 }
             }
             RpcStatus::Failed => {
@@ -98,10 +163,6 @@ pub async fn run_tick(
                     bundle_repo
                         .mark_failed(bid, "tx failed on chain", None)
                         .await?;
-                    events.send(ProviderEvent::BundleFailed {
-                        bundle_id: bid.clone(),
-                        reason: "tx failed on chain".into(),
-                    });
                 }
             }
             RpcStatus::NotFound => {

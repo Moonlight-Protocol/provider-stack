@@ -46,7 +46,10 @@ pub async fn ws_events(
     let claims = verify_token(state.config.service_auth_secret.as_bytes(), bearer)
         .map_err(|_| ApiError::Unauthorized)?;
 
-    if claims.kind != JwtKind::Entity {
+    // Both Operator (dashboard) JWTs and Entity (wallet-user) JWTs are valid for
+    // the per-PP WS — the events-capture harness subscribes as the operator, the
+    // wallet SDK subscribes as the authed entity. Anything else is rejected.
+    if claims.kind != JwtKind::Entity && claims.kind != JwtKind::Operator {
         return Err(ApiError::Forbidden);
     }
 

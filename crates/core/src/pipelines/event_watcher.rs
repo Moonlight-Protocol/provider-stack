@@ -7,6 +7,7 @@
 //! The cursor (last-seen-ledger) is per-channel-auth-id in `event_watcher_state`.
 
 use crate::config::Config;
+use crate::events::{EventBroadcaster, ProviderEvent};
 use provider_stack_persistence::{
     CouncilMembershipRepo, CouncilMembershipStatus, EventWatcherStateRepo, PgPool,
 };
@@ -21,7 +22,7 @@ use tracing::{debug, instrument, warn};
 const EVENT_LIMIT: u32 = 100;
 
 #[instrument(skip_all, name = "pipeline.event_watcher")]
-pub async fn run(config: Arc<Config>, pool: PgPool) {
+pub async fn run(config: Arc<Config>, pool: PgPool, events: EventBroadcaster) {
     let server = match Server::new(
         &config.stellar_rpc_url,
         Options {
@@ -49,7 +50,7 @@ pub async fn run(config: Arc<Config>, pool: PgPool) {
         *guard = true;
         drop(guard);
 
-        if let Err(e) = run_tick(&server, &pool).await {
+        if let Err(e) = run_tick(&server, &pool, &events).await {
             warn!(error = %e, "event_watcher tick failed");
         }
         debug!("event_watcher tick complete");
@@ -60,7 +61,11 @@ pub async fn run(config: Arc<Config>, pool: PgPool) {
 }
 
 /// One watcher tick. Exposed for the integration test.
-pub async fn run_tick(server: &Server, pool: &PgPool) -> anyhow::Result<()> {
+pub async fn run_tick(
+    server: &Server,
+    pool: &PgPool,
+    events: &EventBroadcaster,
+) -> anyhow::Result<()> {
     let memberships_repo = CouncilMembershipRepo::new(pool.clone());
     let cursor_repo = EventWatcherStateRepo::new(pool.clone());
     let memberships = memberships_repo.list_active().await?;
@@ -70,7 +75,13 @@ pub async fn run_tick(server: &Server, pool: &PgPool) -> anyhow::Result<()> {
         let last_cursor = cursor_repo.get(&cursor_key).await?;
         let pagination = match last_cursor.as_deref() {
             Some(c) => Pagination::Cursor(c.to_string()),
-            None => Pagination::From(1),
+            None => {
+                // No cursor yet — seed from the network's current ledger, with a
+                // safety lookback so we don't miss events emitted between when the
+                // membership row was inserted and the watcher's first tick on it.
+                let latest = server.get_latest_ledger().await?;
+                Pagination::From(latest.sequence.saturating_sub(1000).max(1))
+            }
         };
         let filter = EventFilter::new(EventType::Contract)
             .contract(&m.channel_auth_id)
@@ -85,7 +96,7 @@ pub async fn run_tick(server: &Server, pool: &PgPool) -> anyhow::Result<()> {
         };
 
         for event in &response.events {
-            apply_event(&memberships_repo, &m.channel_auth_id, event).await?;
+            apply_event(&memberships_repo, &m.channel_auth_id, event, events).await?;
         }
         if let Some(new_cursor) = response.cursor {
             cursor_repo.set(&cursor_key, &new_cursor).await?;
@@ -98,17 +109,25 @@ async fn apply_event(
     repo: &CouncilMembershipRepo,
     channel_auth_id: &str,
     event: &EventResponse,
+    events: &EventBroadcaster,
 ) -> anyhow::Result<()> {
     let topics = event.topic();
     let Some(first) = topics.first() else {
         return Ok(());
     };
-    let new_status = match topic_symbol(first).as_deref() {
+    let topic = topic_symbol(first);
+    let new_status = match topic.as_deref() {
         Some("provider_added") => CouncilMembershipStatus::Active,
         Some("provider_removed") => CouncilMembershipStatus::Rejected,
         _ => return Ok(()),
     };
     repo.set_status(channel_auth_id, new_status).await?;
+    if topic.as_deref() == Some("provider_added") {
+        events.send(ProviderEvent::channel_provider_added(
+            events.current_scope(),
+            channel_auth_id,
+        ));
+    }
     Ok(())
 }
 

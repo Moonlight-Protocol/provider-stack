@@ -21,10 +21,10 @@ pub fn spawn_all(
     events: EventBroadcaster,
 ) -> Vec<JoinHandle<()>> {
     vec![
-        tokio::spawn(mempool::run(config.clone(), pool.clone())),
-        tokio::spawn(executor::run(config.clone(), pool.clone())),
+        tokio::spawn(mempool::run(config.clone(), pool.clone(), events.clone())),
+        tokio::spawn(executor::run(config.clone(), pool.clone(), events.clone())),
         tokio::spawn(verifier::run(config.clone(), pool.clone(), events.clone())),
-        tokio::spawn(event_watcher::run(config.clone(), pool.clone())),
+        tokio::spawn(event_watcher::run(config.clone(), pool.clone(), events.clone())),
         tokio::spawn(metrics::run(config, pool)),
     ]
 }

@@ -29,6 +29,7 @@ pub struct ChallengePayload {
 }
 
 #[get("/stellar/auth")]
+#[tracing::instrument(name = "P_CreateChallenge", skip_all)]
 pub async fn get_challenge(
     state: web::Data<AppState>,
     q: web::Query<ChallengeQuery>,
@@ -39,15 +40,21 @@ pub async fn get_challenge(
         stellar_strkey::ed25519::PublicKey(signing_key.verifying_key().to_bytes())
     );
     let passphrase = passphrase_for(&state.config.network);
+    tracing::info!(account = %q.account, "stellar challenge requested");
 
-    let built = build_challenge(
-        &signing_key,
-        &server_strkey,
-        &q.account,
-        passphrase,
-        &state.config.service_domain,
-        state.config.challenge_ttl.as_secs(),
-    )?;
+    let built = {
+        let _s = tracing::info_span!("P_CreateChallengeMemory").entered();
+        tracing::info!("building SEP-10 challenge envelope");
+        build_challenge(
+            &signing_key,
+            &server_strkey,
+            &q.account,
+            passphrase,
+            &state.config.service_domain,
+            state.config.challenge_ttl.as_secs(),
+        )?
+    };
+    tracing::info!(account = %q.account, "stellar challenge issued");
 
     Ok(HttpResponse::Ok().json(Data::new(ChallengePayload {
         challenge: built.envelope_xdr_b64,
@@ -58,16 +65,20 @@ pub async fn get_challenge(
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VerifyReq {
-    pub transaction: String,
+    pub signed_challenge: String,
+    pub pp_public_key: Option<String>,
 }
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VerifyPayload {
-    pub token: String,
+    pub jwt: String,
+    pub entity_status: Option<String>,
+    pub kyc_submission_url: Option<String>,
 }
 
 #[post("/stellar/auth")]
+#[tracing::instrument(name = "P_VerifyChallenge", skip_all)]
 pub async fn post_verify(
     state: web::Data<AppState>,
     body: web::Json<VerifyReq>,
@@ -79,14 +90,21 @@ pub async fn post_verify(
     );
     let passphrase = passphrase_for(&state.config.network);
 
-    let verified = verify_signed_envelope(
-        &body.transaction,
-        &server_strkey,
-        passphrase,
-        &state.config.service_domain,
-    )?;
+    tracing::info!("stellar challenge verify started");
+    let verified = {
+        let _s = tracing::info_span!("P_CompareChallenge").entered();
+        tracing::info!("verifying signed challenge envelope");
+        verify_signed_envelope(
+            &body.signed_challenge,
+            &server_strkey,
+            passphrase,
+            &state.config.service_domain,
+        )?
+    };
 
-    let token = mint_token(
+    let _jwt_span = tracing::info_span!("P_GenerateChallengeJWT").entered();
+    tracing::info!("minting entity JWT");
+    let jwt = mint_token(
         state.config.service_auth_secret.as_bytes(),
         &state.config.service_domain,
         &verified.client_account_strkey,
@@ -95,5 +113,9 @@ pub async fn post_verify(
         state.config.session_ttl.as_secs() as i64,
     )?;
 
-    Ok(HttpResponse::Ok().json(Data::new(VerifyPayload { token })))
+    Ok(HttpResponse::Ok().json(Data::new(VerifyPayload {
+        jwt,
+        entity_status: None,
+        kyc_submission_url: None,
+    })))
 }

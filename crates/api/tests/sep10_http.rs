@@ -77,7 +77,7 @@ fn make_test_state(pp_seed: [u8; 32], operator_pubkey_strkey: String) -> AppStat
     AppState {
         config,
         pool,
-        events: EventBroadcaster::default(),
+        events: EventBroadcaster::new(256, "GTESTPP".to_string()),
         nonces,
     }
 }

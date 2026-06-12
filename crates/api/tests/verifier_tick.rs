@@ -86,7 +86,7 @@ async fn success_marks_tx_verified_and_bundle_completed_and_broadcasts_event() {
 
     seed_bundle_with_tx(&db, "BUNDLE-1", "TXHASH").await;
 
-    let events = EventBroadcaster::default();
+    let events = EventBroadcaster::new(256, "GTESTPP".to_string());
     let mut rx = events.subscribe();
 
     let server = Server::new(&rpc.uri(), Options { allow_http: true, ..Options::default() })
@@ -143,7 +143,7 @@ async fn failed_marks_tx_failed_and_bundle_failed_and_broadcasts_event() {
 
     seed_bundle_with_tx(&db, "BUNDLE-2", "TXHASH").await;
 
-    let events = EventBroadcaster::default();
+    let events = EventBroadcaster::new(256, "GTESTPP".to_string());
     let mut rx = events.subscribe();
 
     let server = Server::new(&rpc.uri(), Options { allow_http: true, ..Options::default() })
@@ -190,7 +190,7 @@ async fn not_found_leaves_tx_unverified() {
 
     seed_bundle_with_tx(&db, "BUNDLE-3", "TXHASH").await;
 
-    let events = EventBroadcaster::default();
+    let events = EventBroadcaster::new(256, "GTESTPP".to_string());
     let server = Server::new(&rpc.uri(), Options { allow_http: true, ..Options::default() })
         .expect("Server::new");
     run_tick(&server, &db.pool, &events).await.expect("verifier tick");

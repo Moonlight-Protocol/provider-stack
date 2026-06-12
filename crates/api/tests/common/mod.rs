@@ -121,7 +121,7 @@ pub fn build_test_app_state(
     AppState {
         config,
         pool,
-        events: EventBroadcaster::default(),
+        events: EventBroadcaster::new(256, "GTESTPP".to_string()),
         nonces,
     }
 }
