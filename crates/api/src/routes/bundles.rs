@@ -41,6 +41,27 @@ pub async fn post_submit(
     _path: web::Path<String>,
     body: web::Json<SubmitReq>,
 ) -> Result<impl Responder, ApiError> {
+    // Entity-approval gate (mirrors provider-platform/src/core/service/bundle/add-bundle.process.ts:
+    // submitter entity must be APPROVED, otherwise 403 + best-effort record_interaction so the
+    // unauthorized submitter becomes visible to the operator via GET /providers/:pp/entities).
+    let entities = provider_stack_persistence::EntityRepo::new(state.pool.clone());
+    let submitter_pubkey = auth.0.sub.clone();
+    let approval = entities.find_by_id(&submitter_pubkey).await?;
+    let approved = matches!(
+        approval.as_ref().map(|e| e.status),
+        Some(provider_stack_persistence::EntityStatus::Approved)
+    );
+    if !approved {
+        if let Err(e) = entities.record_interaction(&submitter_pubkey).await {
+            tracing::warn!(
+                pubkey = %submitter_pubkey,
+                error = %e,
+                "failed to record rejected submitter interaction"
+            );
+        }
+        return Err(ApiError::Forbidden);
+    }
+
     let SubmitReq { operations_mlxdr, channel_contract_id } = body.into_inner();
 
     let op_count = operations_mlxdr.as_array().map(|a| a.len()).unwrap_or(0);

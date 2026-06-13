@@ -8,7 +8,9 @@
 use crate::envelope::Data;
 use crate::error::ApiError;
 use crate::state::AppState;
-use actix_web::{post, web, HttpResponse, Responder};
+use crate::middleware_auth::OperatorAuth;
+use actix_web::{get, post, web, HttpResponse, Responder};
+use chrono::{DateTime, Utc};
 use ed25519_dalek::SigningKey;
 use provider_stack_core::auth::sep10::signing_key_from_seed;
 use provider_stack_core::auth::sep43;
@@ -86,7 +88,17 @@ pub async fn post_register(
     let entity = match entities.find_by_id(&entity_id).await? {
         Some(existing) if existing.status == EntityStatus::Approved => existing,
         Some(_) => {
-            entities.set_status(&entity_id, EntityStatus::Approved).await?;
+            // Pre-existing row from record_interaction at the SEP-10 connect gate
+            // (PR #118): UNVERIFIED with no identity fields. Approving here is also
+            // when name + jurisdictions become known, so the operator entities view
+            // doesn't have to handle null names for KYC-approved entities.
+            entities
+                .approve_with_identity(
+                    &entity_id,
+                    body.name.as_deref(),
+                    body.jurisdictions.as_deref(),
+                )
+                .await?;
             entities.find_by_id(&entity_id).await?.expect("just updated")
         }
         None => {
@@ -128,4 +140,57 @@ fn ensure_pk_is_this_pp(state: &AppState, pk: &str) -> Result<(), ApiError> {
         return Err(ApiError::NotFound);
     }
     Ok(())
+}
+
+/// One row of the operator-facing entities view — see PR #118
+/// (`provider-platform/src/http/v1/entities/get.ts`).
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EntityListRow {
+    pub pubkey: String,
+    pub status: String,
+    pub name: Option<String>,
+    pub jurisdictions: Option<Vec<String>>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// `GET /api/v1/providers/:pp/entities` — operator view of every entity that
+/// has interacted with this PP (KYC-approved + unauthorized pubkeys recorded
+/// at the SEP-10 connect + bundle-submit 403 gates). Single-PP shape: the
+/// URL `pp` must match the env-configured PP, otherwise 404 — matching the
+/// Deno `requirePpOwnership` behaviour.
+#[get("/providers/{pk}/entities")]
+#[tracing::instrument(name = "P_ListEntities", skip_all)]
+pub async fn get_list(
+    state: web::Data<AppState>,
+    _auth: OperatorAuth,
+    path: web::Path<String>,
+) -> Result<impl Responder, ApiError> {
+    ensure_pk_is_this_pp(&state, &path)?;
+    let entities = provider_stack_persistence::EntityRepo::new(state.pool.clone());
+    let rows = entities.list_all_by_updated().await?;
+    let payload: Vec<EntityListRow> = rows
+        .into_iter()
+        .map(|e| EntityListRow {
+            pubkey: e.id,
+            status: status_to_string(e.status),
+            name: e.name,
+            jurisdictions: e.jurisdictions,
+            created_at: e.created_at,
+            updated_at: e.updated_at,
+        })
+        .collect();
+    Ok(HttpResponse::Ok().json(Data::new(payload)))
+}
+
+fn status_to_string(s: provider_stack_persistence::EntityStatus) -> String {
+    use provider_stack_persistence::EntityStatus::*;
+    match s {
+        Unverified => "UNVERIFIED",
+        Approved => "APPROVED",
+        Pending => "PENDING",
+        Blocked => "BLOCKED",
+    }
+    .to_string()
 }

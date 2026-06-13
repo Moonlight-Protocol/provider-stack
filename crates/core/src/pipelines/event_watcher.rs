@@ -83,10 +83,27 @@ pub async fn run_tick(
                 Pagination::From(latest.sequence.saturating_sub(1000).max(1))
             }
         };
-        let filter = EventFilter::new(EventType::Contract)
-            .contract(&m.channel_auth_id)
-            .topic(vec![Topic::Any, Topic::Any]);
-        let result = server.get_events(pagination, vec![filter], EVENT_LIMIT).await;
+        let build_filter = || {
+            EventFilter::new(EventType::Contract)
+                .contract(&m.channel_auth_id)
+                .topic(vec![Topic::Any, Topic::Any])
+        };
+        let mut result = server
+            .get_events(pagination, vec![build_filter()], EVENT_LIMIT)
+            .await;
+        // Self-heal "startLedger must be within the ledger range: X - Y" — happens on a
+        // fresh Stellar local where ledger 1 is below the retention min, or after a
+        // long idle when the cursor falls out of retention. Parse the new minimum from
+        // the error and retry from there. Best-effort: if parse fails, leave the error
+        // alone for the next tick.
+        if let Err(e) = &result {
+            if let Some(min_ledger) = parse_min_ledger_from_error(&format!("{e:?}")) {
+                cursor_repo.set(&cursor_key, "").await.ok();
+                result = server
+                    .get_events(Pagination::From(min_ledger), vec![build_filter()], EVENT_LIMIT)
+                    .await;
+            }
+        }
         let response = match result {
             Ok(r) => r,
             Err(e) => {
@@ -103,6 +120,17 @@ pub async fn run_tick(
         }
     }
     Ok(())
+}
+
+/// Extract the network-reported minimum-retained ledger from a Soroban
+/// "startLedger must be within the ledger range: X - Y" error so the watcher
+/// can re-seed past genesis when the cursor falls out of retention.
+fn parse_min_ledger_from_error(err: &str) -> Option<u32> {
+    let needle = "ledger range: ";
+    let idx = err.find(needle)?;
+    let after = &err[idx + needle.len()..];
+    let dash = after.find(" -")?;
+    after[..dash].trim().parse().ok()
 }
 
 async fn apply_event(

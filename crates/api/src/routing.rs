@@ -16,6 +16,7 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
             .service(routes::auth_stellar::post_verify)
             .service(routes::entities::post_challenge)
             .service(routes::entities::post_register)
+            .service(routes::entities::get_list)
             .service(routes::council::post_discover)
             .service(routes::council::post_join)
             .service(routes::council::get_membership)

@@ -65,6 +65,71 @@ impl EntityRepo {
             .await?;
         Ok(())
     }
+
+    /// Upgrade an existing entity row (typically created by `record_interaction`
+    /// with status=UNVERIFIED) to APPROVED while also populating the identity
+    /// fields the operator-facing entities view surfaces. Mirrors the Deno
+    /// reference's full upsert path in
+    /// `provider-platform/src/core/service/auth/challenge/store/attach-entity-status.ts`.
+    pub async fn approve_with_identity(
+        &self,
+        id: &str,
+        name: Option<&str>,
+        jurisdictions: Option<&[String]>,
+    ) -> Result<()> {
+        sqlx::query(
+            r#"UPDATE entities
+                  SET status = 'APPROVED'::entity_status,
+                      name = COALESCE($2, name),
+                      jurisdictions = COALESCE($3, jurisdictions),
+                      updated_at = now()
+                WHERE id = $1"#,
+        )
+        .bind(id)
+        .bind(name)
+        .bind(jurisdictions)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Record that `pubkey` interacted with this PP (single-PP standin maps the
+    /// Deno reference's per-PP approval table onto the `entities` table itself).
+    /// Locked write-invariant — mirrors
+    /// `provider-platform/src/persistence/drizzle/repository/pp-entity-approval.repository.ts::recordInteraction`:
+    ///   - no row              → insert `UNVERIFIED`
+    ///   - row is `UNVERIFIED` → bump `updated_at` only
+    ///   - row APPROVED/PENDING/BLOCKED → no-op (status + timestamps untouched)
+    pub async fn record_interaction(&self, pubkey: &str) -> Result<()> {
+        sqlx::query(
+            r#"INSERT INTO entities (id, status)
+               VALUES ($1, 'UNVERIFIED'::entity_status)
+               ON CONFLICT (id) DO UPDATE
+                 SET updated_at = now()
+                 WHERE entities.status = 'UNVERIFIED'::entity_status
+                   AND entities.deleted_at IS NULL"#,
+        )
+        .bind(pubkey)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// All non-deleted entity rows, newest interaction first. Mirrors
+    /// `pp-entity-approval.repository.ts::listByPp` — the single-PP standin
+    /// collapses the join across `pp_entity_approvals → account → entity`
+    /// into a direct read of `entities` since the entity id IS the pubkey.
+    pub async fn list_all_by_updated(&self) -> Result<Vec<Entity>> {
+        let rows = sqlx::query_as::<_, Entity>(
+            r#"SELECT id, status, name, jurisdictions, created_at, updated_at, created_by, updated_by, deleted_at
+               FROM entities
+               WHERE deleted_at IS NULL
+               ORDER BY updated_at DESC"#,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
 }
 
 // ---- accounts ----

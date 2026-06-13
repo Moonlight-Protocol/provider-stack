@@ -102,6 +102,24 @@ pub async fn post_verify(
         )?
     };
 
+    // Record that this pubkey hit the SEP-10 connect — mirrors PR #118's
+    // attach-entity-status best-effort recordInteraction. The locked upsert
+    // never downgrades APPROVED/PENDING/BLOCKED; failures here must never
+    // break the auth response.
+    {
+        let entities = provider_stack_persistence::EntityRepo::new(state.pool.clone());
+        if let Err(e) = entities
+            .record_interaction(&verified.client_account_strkey)
+            .await
+        {
+            tracing::warn!(
+                pubkey = %verified.client_account_strkey,
+                error = %e,
+                "failed to record entity interaction (stellar connect)"
+            );
+        }
+    }
+
     let _jwt_span = tracing::info_span!("P_GenerateChallengeJWT").entered();
     tracing::info!("minting entity JWT");
     let jwt = mint_token(
