@@ -2,7 +2,9 @@ import { page } from "../components/page.ts";
 import { escapeHtml } from "../lib/dom.ts";
 import {
   type BundleDetail,
+  type EntityInteraction,
   getBundleDetail,
+  getEntities,
   getMetrics,
   getTreasury,
   listPps,
@@ -64,6 +66,18 @@ function fmtRelativeTime(epochMs: number, now: number): string {
   return `${hr}h ago`;
 }
 
+/** Absolute, human-readable date with hour:minute (24h), e.g. "Jun 12, 2026, 18:16". */
+function fmtDateTime(epochMs: number): string {
+  return new Date(epochMs).toLocaleString(undefined, {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+}
+
 function withBriefCopyFeedback(btn: HTMLElement): void {
   const orig = btn.innerHTML;
   btn.innerHTML =
@@ -121,6 +135,8 @@ async function renderContent(): Promise<HTMLElement> {
   wireHeader(root, pp);
   wireFund(root, pp.publicKey);
   wireCouncils(root);
+  // Best-effort: a fetch failure renders an error row, never blocks the page.
+  renderEntitiesSection(root, ppPublicKey);
 
   // v2 zones (counter strip / recent bundles / activity feed / sparklines).
   const zones = setupV2Zones({
@@ -215,6 +231,11 @@ function renderTemplate(
         ${renderSparklineBox("queue", "Queue depth")}
       </div>
     </div>
+
+    <h3 style="margin:2rem 0 0.5rem">Entities</h3>
+    <div id="entities-section" style="margin-bottom:2rem">
+      <div id="entities-body" style="color:var(--text-muted);font-size:0.85rem">Loading entities…</div>
+    </div>
   `;
 }
 
@@ -281,6 +302,89 @@ function renderCouncilCard(m: MembershipInfo): string {
       <div style="display:flex;gap:0.25rem;flex-wrap:wrap">${assetChips}</div>
     </div>
   `;
+}
+
+// -----------------------------------------------------------------------------
+// Entities section — every pubkey that has interacted with this PP
+// -----------------------------------------------------------------------------
+
+/** Maps a per-PP entity status to one of the lib's badge variants. UNVERIFIED
+ * uses a neutral local variant (badge-unverified, app-styles.css). */
+function entityStatusBadge(status: string): string {
+  const cls = status === "APPROVED"
+    ? "badge-active"
+    : status === "PENDING"
+    ? "badge-pending"
+    : status === "BLOCKED"
+    ? "badge-inactive"
+    : "badge-unverified"; // UNVERIFIED + any unknown future value
+  return `<span class="badge ${cls}">${escapeHtml(status)}</span>`;
+}
+
+const ENTITY_COPY_ICON =
+  `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>`;
+
+async function renderEntitiesSection(
+  root: HTMLElement,
+  ppPublicKey: string,
+): Promise<void> {
+  const body = root.querySelector("#entities-body") as HTMLElement | null;
+  if (!body) return;
+
+  let entities: EntityInteraction[];
+  try {
+    entities = await getEntities(ppPublicKey);
+  } catch (err) {
+    body.innerHTML = `<span class="error-text">${
+      escapeHtml(
+        err instanceof Error ? err.message : "Failed to load entities",
+      )
+    }</span>`;
+    return;
+  }
+
+  if (entities.length === 0) {
+    body.textContent = "No entities have interacted with this provider yet";
+    return;
+  }
+
+  const rows = entities.map((e) => {
+    const date = fmtDateTime(new Date(e.updatedAt).getTime());
+    return `
+      <tr>
+        <td style="white-space:nowrap;color:var(--text-muted)">${
+      escapeHtml(date)
+    }</td>
+        <td>
+          <span style="font-family:monospace">${
+      escapeHtml(truncate(e.pubkey))
+    }</span>
+          <button class="icon-btn entity-copy-btn" data-pubkey="${
+      escapeHtml(e.pubkey)
+    }" title="Copy public key" style="vertical-align:middle">${ENTITY_COPY_ICON}</button>
+        </td>
+        <td>${entityStatusBadge(e.status)}</td>
+      </tr>`;
+  }).join("");
+
+  body.innerHTML = `
+    <table style="margin:0">
+      <thead>
+        <tr><th>Date</th><th>Public Key</th><th>Status</th></tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+
+  body.querySelectorAll(".entity-copy-btn").forEach((el) => {
+    const btn = el as HTMLButtonElement;
+    btn.addEventListener("click", () => {
+      const pubkey = btn.dataset.pubkey;
+      if (!pubkey) return;
+      navigator.clipboard.writeText(pubkey).then(() =>
+        withBriefCopyFeedback(btn)
+      );
+    });
+  });
 }
 
 // -----------------------------------------------------------------------------

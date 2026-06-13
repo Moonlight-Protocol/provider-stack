@@ -352,6 +352,28 @@ export async function getMetrics(
   return body.data as MetricsResponse;
 }
 
+// --- Entities interacting with the provider (operator view) ---
+
+export interface EntityInteraction {
+  pubkey: string;
+  status: string;
+  name: string | null;
+  jurisdictions: string[] | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export async function getEntities(
+  ppPublicKey: string,
+): Promise<EntityInteraction[]> {
+  const res = await platformFetch(
+    `/providers/${encodeURIComponent(ppPublicKey)}/entities`,
+  );
+  if (!res.ok) throw new Error("Failed to fetch entities");
+  const { data } = await res.json();
+  return data as EntityInteraction[];
+}
+
 export type BundleOpKind =
   | "deposit"
   | "withdraw"

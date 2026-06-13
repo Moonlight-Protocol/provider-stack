@@ -46,6 +46,14 @@ th {
   border-radius: 4px;
 }
 
+/* Neutral badge for UNVERIFIED entity status. The lib ships
+   .badge / .badge-active / .badge-pending / .badge-inactive; "unverified" has
+   no semantic color (not an error, not pending) so it gets a muted grey. */
+.badge-unverified {
+  background: rgba(148, 163, 184, 0.15);
+  color: var(--text-muted);
+}
+
 /* Empty-state extensions for code/details/summary (lib ships .empty-state base) */
 .empty-state details {
   margin-top: 1rem;
