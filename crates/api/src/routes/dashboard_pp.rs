@@ -60,21 +60,91 @@ fn membership_status_to_string(s: provider_stack_persistence::CouncilMembershipS
 async fn load_pp_memberships(state: &AppState) -> Result<Vec<PpMembership>, ApiError> {
     let repo = provider_stack_persistence::CouncilMembershipRepo::new(state.pool.clone());
     let rows = repo.list_active().await?;
-    Ok(rows
-        .into_iter()
-        .map(|m| PpMembership {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .ok();
+
+    let mut out = Vec::with_capacity(rows.len());
+    for m in rows {
+        // Enrich from the council-platform's public summary endpoint:
+        //   /api/v1/public/council?councilId=<channelAuthId>
+        // Provides the council's display name, the asset/channel chips, and
+        // the council's jurisdiction set. Best-effort — if the call fails
+        // the row still renders with the local fields.
+        let (resolved_name, channels, council_jurs) = match &client {
+            Some(c) => {
+                let url = format!(
+                    "{}/api/v1/public/council?councilId={}",
+                    m.council_url.trim_end_matches('/'),
+                    urlencoding(&m.channel_auth_id),
+                );
+                match c.get(&url).send().await {
+                    Ok(resp) if resp.status().is_success() => {
+                        let body = resp.json::<serde_json::Value>().await.ok();
+                        let name = body
+                            .as_ref()
+                            .and_then(|b| b.get("data"))
+                            .and_then(|d| d.get("council"))
+                            .and_then(|c| c.get("name"))
+                            .and_then(|n| n.as_str())
+                            .map(str::to_string);
+                        let channels = body
+                            .as_ref()
+                            .and_then(|b| b.get("data"))
+                            .and_then(|d| d.get("channels"))
+                            .and_then(|c| c.as_array())
+                            .cloned()
+                            .unwrap_or_default();
+                        let jurs = body
+                            .as_ref()
+                            .and_then(|b| b.get("data"))
+                            .and_then(|d| d.get("jurisdictions"))
+                            .and_then(|j| j.as_array())
+                            .map(|arr| {
+                                arr.iter()
+                                    .filter_map(|v| v.get("countryCode"))
+                                    .filter_map(|v| v.as_str())
+                                    .map(str::to_string)
+                                    .collect::<Vec<_>>()
+                            });
+                        (name, channels, jurs)
+                    }
+                    _ => (None, Vec::new(), None),
+                }
+            }
+            None => (None, Vec::new(), None),
+        };
+
+        out.push(PpMembership {
             council_url: m.council_url,
-            council_name: m.council_name,
+            council_name: resolved_name.or(m.council_name),
             status: membership_status_to_string(m.status),
             channel_auth_id: m.channel_auth_id,
             claimed_jurisdictions: m
                 .claimed_jurisdictions
                 .as_deref()
                 .and_then(|s| serde_json::from_str::<Vec<String>>(s).ok()),
-            council_jurisdictions: None,
-            channels: Vec::new(),
-        })
-        .collect())
+            council_jurisdictions: council_jurs,
+            channels,
+        });
+    }
+    Ok(out)
+}
+
+/// Minimal URL-encoder for the councilId query value. Mirrors the one in
+/// council.rs without pulling in a heavier dependency.
+fn urlencoding(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for byte in s.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(byte as char)
+            }
+            _ => out.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    out
 }
 
 #[get("/dashboard/pp")]

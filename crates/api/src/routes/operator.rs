@@ -12,8 +12,10 @@ use crate::middleware_auth::OperatorAuth;
 use crate::state::AppState;
 use actix_web::{get, web, HttpResponse, Responder};
 use chrono::{DateTime, Utc};
-use provider_stack_persistence::{BundleStatus, OperationsBundleRepo};
+use provider_stack_core::bundle::classify_bundle;
+use provider_stack_persistence::{BundleStatus, EntityRepo, OperationsBundleRepo};
 use serde::{Deserialize, Serialize};
+use serde_json::Value as JsonValue;
 
 macro_rules! stub_get {
     ($fn:ident, $path:literal, $body:expr) => {
@@ -89,6 +91,30 @@ fn bundle_status_to_string(s: BundleStatus) -> String {
     .to_string()
 }
 
+/// Walk the classified bundle and return (primary_amount, primary_kind).
+/// Mirrors `events.rs::summarize_bundle` — deposit wins over withdraw wins
+/// over create (send). i128 totals are stringified so JSON can carry them
+/// past JS's 2^53 limit.
+fn primary_amount_and_kind(
+    operations_mlxdr: &JsonValue,
+) -> (Option<String>, &'static str) {
+    let Ok((classified, _)) = classify_bundle(operations_mlxdr) else {
+        return (None, "unknown");
+    };
+    let total_deposit: i128 = classified.deposit.iter().map(|o| o.amount).sum();
+    let total_withdraw: i128 = classified.withdraw.iter().map(|o| o.amount).sum();
+    let total_create: i128 = classified.create.iter().map(|o| o.amount).sum();
+    if total_deposit > 0 {
+        (Some(total_deposit.to_string()), "deposit")
+    } else if total_withdraw > 0 {
+        (Some(total_withdraw.to_string()), "withdraw")
+    } else if total_create > 0 {
+        (Some(total_create.to_string()), "send")
+    } else {
+        (None, "unknown")
+    }
+}
+
 #[get("/provider/bundles")]
 pub async fn get_bundles(
     state: web::Data<AppState>,
@@ -98,33 +124,125 @@ pub async fn get_bundles(
     let limit = query.limit.clamp(1, 500);
     let repo = OperationsBundleRepo::new(state.pool.clone());
     let rows = repo.list_recent_with_entity(limit).await?;
-    let bundles: Vec<RecentBundleSummary> = rows
-        .into_iter()
-        .map(|r| RecentBundleSummary {
+
+    // Re-decode each bundle's MLXDR to surface the primary amount in the list.
+    // The bundle row doesn't denormalize amount — we have to classify on read.
+    // At dashboard limits (≤500) this is cheap enough; revisit if it grows.
+    let mut bundles = Vec::with_capacity(rows.len());
+    for r in rows {
+        let amount = if let Some(detail) = repo.find_by_id(&r.id).await? {
+            primary_amount_and_kind(&detail.operations_mlxdr).0
+        } else {
+            None
+        };
+        bundles.push(RecentBundleSummary {
             id: r.id,
             status: bundle_status_to_string(r.status),
             channel_contract_id: r.channel_contract_id,
             entity_name: r.entity_name,
             jurisdictions: r.entity_jurisdictions.unwrap_or_default(),
-            amount: None,
+            amount,
             created_at: r.created_at,
             updated_at: r.updated_at,
-        })
-        .collect();
+        });
+    }
     Ok(HttpResponse::Ok().json(Data::new(BundlesListPayload { bundles })))
 }
 
-#[get("/provider/transactions/{tx_id}")]
-pub async fn get_transaction(
-    _state: web::Data<AppState>,
-    _auth: OperatorAuth,
-    _path: web::Path<String>,
-) -> Result<impl Responder, ApiError> {
-    Err::<HttpResponse, _>(ApiError::NotFound)
+// -----------------------------------------------------------------------------
+// GET /provider/bundles/{bundle_id} — per-row detail. SPA reads
+// `operations[]` to compute the Action label (Deposit / Withdraw / Send)
+// and `amount` to fill the Amount cell on first paint when the list
+// hadn't yet enriched the row.
+// -----------------------------------------------------------------------------
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BundleOp {
+    pub kind: &'static str,
+    pub amount: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BundleDetail {
+    pub id: String,
+    pub status: String,
+    pub channel_contract_id: Option<String>,
+    pub operations: Vec<BundleOp>,
+    pub entity_name: Option<String>,
+    pub jurisdictions: Vec<String>,
+    pub amount: Option<String>,
+}
+
+fn op_kind_str(k: provider_stack_core::mlxdr::OperationKind) -> &'static str {
+    use provider_stack_core::mlxdr::OperationKind::*;
+    match k {
+        Create => "create",
+        Spend => "spend",
+        Deposit => "deposit",
+        Withdraw => "withdraw",
+    }
 }
 
 #[get("/provider/bundles/{bundle_id}")]
 pub async fn get_bundle(
+    state: web::Data<AppState>,
+    _auth: OperatorAuth,
+    path: web::Path<String>,
+) -> Result<impl Responder, ApiError> {
+    let bundle_id = path.into_inner();
+    let bundle_repo = OperationsBundleRepo::new(state.pool.clone());
+    let bundle = bundle_repo
+        .find_by_id(&bundle_id)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+
+    let (operations, amount) = match classify_bundle(&bundle.operations_mlxdr) {
+        Ok((classified, _)) => {
+            let mut ops = Vec::new();
+            for o in classified.deposit.iter().chain(classified.withdraw.iter())
+                .chain(classified.create.iter()).chain(classified.spend.iter())
+            {
+                ops.push(BundleOp {
+                    kind: op_kind_str(o.kind),
+                    amount: if o.amount != 0 {
+                        Some(o.amount.to_string())
+                    } else {
+                        None
+                    },
+                });
+            }
+            let amount = primary_amount_and_kind(&bundle.operations_mlxdr).0;
+            (ops, amount)
+        }
+        Err(_) => (Vec::new(), None),
+    };
+
+    let (entity_name, jurisdictions) = if let Some(submitter) = bundle.created_by.as_deref() {
+        let entity_repo = EntityRepo::new(state.pool.clone());
+        if let Some(e) = entity_repo.find_by_id(submitter).await? {
+            (e.name, e.jurisdictions.unwrap_or_default())
+        } else {
+            (None, Vec::new())
+        }
+    } else {
+        (None, Vec::new())
+    };
+
+    Ok(HttpResponse::Ok().json(Data::new(BundleDetail {
+        id: bundle.id,
+        status: bundle_status_to_string(bundle.status),
+        channel_contract_id: bundle.channel_contract_id,
+        operations,
+        entity_name,
+        jurisdictions,
+        amount,
+    })))
+}
+
+#[get("/provider/transactions/{tx_id}")]
+pub async fn get_transaction(
     _state: web::Data<AppState>,
     _auth: OperatorAuth,
     _path: web::Path<String>,
