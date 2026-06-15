@@ -726,6 +726,26 @@ impl MempoolMetricRepo {
         .await?;
         Ok(rows)
     }
+
+    /// Snapshots within the [since, now] window, newest first. Drives the
+    /// dashboard counter strip + sparklines.
+    pub async fn list_since(
+        &self,
+        since: chrono::DateTime<chrono::Utc>,
+    ) -> Result<Vec<MempoolMetric>> {
+        let rows = sqlx::query_as::<_, MempoolMetric>(
+            r#"SELECT id, recorded_at, platform_version, queue_depth, slot_count,
+                      bundles_completed, bundles_expired, bundles_failed,
+                      avg_processing_ms, p95_processing_ms, throughput_per_min
+               FROM mempool_metrics
+               WHERE recorded_at >= $1
+               ORDER BY recorded_at DESC"#,
+        )
+        .bind(since)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
 }
 
 // ---- event_watcher_state ----

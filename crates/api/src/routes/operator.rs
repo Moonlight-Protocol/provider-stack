@@ -13,7 +13,9 @@ use crate::state::AppState;
 use actix_web::{get, web, HttpResponse, Responder};
 use chrono::{DateTime, Utc};
 use provider_stack_core::bundle::classify_bundle;
-use provider_stack_persistence::{BundleStatus, EntityRepo, OperationsBundleRepo};
+use provider_stack_persistence::{
+    BundleStatus, EntityRepo, MempoolMetricRepo, OperationsBundleRepo,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 
@@ -44,11 +46,71 @@ stub_get!(
 stub_get!(get_utxos,          "/provider/utxos",          serde_json::json!({ "utxos": [] }));
 stub_get!(get_transactions,   "/provider/transactions",   serde_json::json!({ "transactions": [] }));
 stub_get!(get_audit_export,   "/provider/audit-export",   serde_json::json!({ "entries": [] }));
-stub_get!(
-    get_metrics,
-    "/provider/metrics",
-    serde_json::json!({ "rangeMin": 0, "since": "", "snapshots": [] })
-);
+
+#[derive(Deserialize)]
+pub struct MetricsQuery {
+    #[serde(default = "default_range_min")]
+    pub range_min: i64,
+}
+
+fn default_range_min() -> i64 {
+    360
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MetricsSnapshot {
+    pub recorded_at: DateTime<Utc>,
+    pub platform_version: String,
+    pub queue_depth: i32,
+    pub slot_count: i32,
+    pub bundles_completed: i32,
+    pub bundles_expired: i32,
+    pub bundles_failed: i32,
+    pub avg_processing_ms: Option<f64>,
+    pub p95_processing_ms: Option<f64>,
+    pub throughput_per_min: Option<f64>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MetricsPayload {
+    pub range_min: i64,
+    pub since: DateTime<Utc>,
+    pub snapshots: Vec<MetricsSnapshot>,
+}
+
+#[get("/provider/metrics")]
+pub async fn get_metrics(
+    state: web::Data<AppState>,
+    _auth: OperatorAuth,
+    query: web::Query<MetricsQuery>,
+) -> Result<impl Responder, ApiError> {
+    let range_min = query.range_min.clamp(1, 24 * 60);
+    let since = Utc::now() - chrono::Duration::minutes(range_min);
+    let repo = MempoolMetricRepo::new(state.pool.clone());
+    let rows = repo.list_since(since).await?;
+    let snapshots = rows
+        .into_iter()
+        .map(|m| MetricsSnapshot {
+            recorded_at: m.recorded_at,
+            platform_version: m.platform_version,
+            queue_depth: m.queue_depth,
+            slot_count: m.slot_count,
+            bundles_completed: m.bundles_completed,
+            bundles_expired: m.bundles_expired,
+            bundles_failed: m.bundles_failed,
+            avg_processing_ms: m.avg_processing_ms,
+            p95_processing_ms: m.p95_processing_ms,
+            throughput_per_min: m.throughput_per_min,
+        })
+        .collect();
+    Ok(HttpResponse::Ok().json(Data::new(MetricsPayload {
+        range_min,
+        since,
+        snapshots,
+    })))
+}
 
 #[derive(Deserialize)]
 pub struct ListBundlesQuery {
