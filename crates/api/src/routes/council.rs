@@ -277,6 +277,18 @@ pub async fn post_membership(
     let repo = CouncilMembershipRepo::new(state.pool.clone());
     let memberships = repo.list_active().await?;
 
+    // Council-platform answers "is this PP active in this council?" at
+    //   GET /api/v1/public/provider/membership-status?councilId=…&publicKey=…
+    //   200 → "ACTIVE", 202 → "PENDING", 404 → "NOT_FOUND" (rejected)
+    // The PP we ask about is this stack's env-pinned operator key.
+    let signing = provider_stack_core::auth::sep10::signing_key_from_seed(
+        &state.config.pp_secret_key,
+    )?;
+    let pp_pubkey = format!(
+        "{}",
+        stellar_strkey::ed25519::PublicKey(signing.verifying_key().to_bytes())
+    );
+
     let client = reqwest::Client::builder()
         .timeout(COUNCIL_HTTP_TIMEOUT)
         .build()
@@ -285,29 +297,38 @@ pub async fn post_membership(
     let mut updated = 0usize;
     for m in &memberships {
         let url = format!(
-            "{}/api/v1/public/council?councilId={}",
+            "{}/api/v1/public/provider/membership-status?councilId={}&publicKey={}",
             m.council_url.trim_end_matches('/'),
-            urlencoding(&m.channel_auth_id)
+            urlencoding(&m.channel_auth_id),
+            urlencoding(&pp_pubkey),
         );
         let Ok(resp) = client.get(&url).send().await else {
             continue;
         };
-        if !resp.status().is_success() {
+        let http_status = resp.status();
+        // 404 = council-platform considers the PP not-a-member (either never joined
+        // or its request was rejected). Demote local row to REJECTED.
+        if http_status.as_u16() == 404 {
+            if m.status != CouncilMembershipStatus::Rejected {
+                repo.set_status(&m.channel_auth_id, CouncilMembershipStatus::Rejected).await?;
+                updated += 1;
+            }
+            continue;
+        }
+        // Any other non-2xx: skip — don't clobber the watcher's truth on a transient.
+        if !http_status.is_success() && http_status.as_u16() != 202 {
             continue;
         }
         let Ok(body) = resp.json::<JsonValue>().await else {
             continue;
         };
-        let status_str = body
-            .get("data")
-            .and_then(|d| d.get("council"))
-            .and_then(|c| c.get("status"))
-            .and_then(|s| s.as_str())
-            .unwrap_or("PENDING");
+        let Some(status_str) = body.get("status").and_then(|s| s.as_str()) else {
+            continue;
+        };
         let new_status = match status_str {
             "ACTIVE" => CouncilMembershipStatus::Active,
-            "REJECTED" => CouncilMembershipStatus::Rejected,
-            _ => CouncilMembershipStatus::Pending,
+            "PENDING" => CouncilMembershipStatus::Pending,
+            _ => continue,
         };
         if new_status != m.status {
             repo.set_status(&m.channel_auth_id, new_status).await?;
