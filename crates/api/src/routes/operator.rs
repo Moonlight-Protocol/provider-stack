@@ -1,8 +1,12 @@
 //! Operator analytics endpoints. Single-PP: the PP is env-pinned, so the
 //! URLs carry no `:pp` segment — the routes are flat under `/provider/`.
 //!
-//! **Status**: scaffold — each returns an empty-shape JSON for SPA wiring tests.
+//! **Status**: scaffold — each returns an empty-shape JSON wrapped in the
+//! `{ data: ... }` envelope the SPA reads, with the field names the SPA
+//! consumers expect (metrics → `snapshots`, bundles list → `bundles`,
+//! treasury → `address`/`balances`/…). Replace with real implementations.
 
+use crate::envelope::Data;
 use crate::error::ApiError;
 use crate::middleware_auth::OperatorAuth;
 use crate::state::AppState;
@@ -15,19 +19,32 @@ macro_rules! stub_get {
             _state: web::Data<AppState>,
             _auth: OperatorAuth,
         ) -> Result<impl Responder, ApiError> {
-            Ok::<_, ApiError>(HttpResponse::Ok().json($body))
+            Ok::<_, ApiError>(HttpResponse::Ok().json(Data::new($body)))
         }
     };
 }
 
 stub_get!(get_channels,       "/provider/channels",       serde_json::json!({ "channels": [] }));
 stub_get!(get_mempool,        "/provider/mempool",        serde_json::json!({ "slots": [] }));
-stub_get!(get_treasury,       "/provider/treasury",       serde_json::json!({ "balance": "0" }));
+stub_get!(
+    get_treasury,
+    "/provider/treasury",
+    serde_json::json!({
+        "address": "",
+        "sequence": "0",
+        "balances": [],
+        "lastModifiedLedger": 0
+    })
+);
 stub_get!(get_utxos,          "/provider/utxos",          serde_json::json!({ "utxos": [] }));
 stub_get!(get_transactions,   "/provider/transactions",   serde_json::json!({ "transactions": [] }));
 stub_get!(get_bundles,        "/provider/bundles",        serde_json::json!({ "bundles": [] }));
 stub_get!(get_audit_export,   "/provider/audit-export",   serde_json::json!({ "entries": [] }));
-stub_get!(get_metrics,        "/provider/metrics",        serde_json::json!({ "samples": [] }));
+stub_get!(
+    get_metrics,
+    "/provider/metrics",
+    serde_json::json!({ "rangeMin": 0, "since": "", "snapshots": [] })
+);
 
 #[get("/provider/transactions/{tx_id}")]
 pub async fn get_transaction(
