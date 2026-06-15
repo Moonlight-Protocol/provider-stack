@@ -79,29 +79,69 @@ impl NonceStore {
     }
 }
 
-/// Verify an SEP-43 signature over the nonce bytes by the given public key.
+/// Verify a Stellar wallet challenge signature over `nonce`.
 ///
-/// `public_key_strkey` is the G... Stellar address. `signature_b64` is base64'd 64-byte sig.
+/// Accepts the three encodings produced by the wallet ecosystem in current use
+/// (mirrors `provider-platform/src/core/service/auth/verify-stellar-signature.ts`):
+///   - SEP-43 (Freighter `signMessage`): `sign(SHA256(0x00 0x00 || len(msg) BE32 || msg))`
+///   - SEP-53 (Stellar Signed Message):  `sign(SHA256("Stellar Signed Message:\n" + msg))`
+///   - Raw bytes (SDK direct-sign):       `sign(base64-decoded nonce)`
+///
+/// `signature` may be hex (SEP-43 / SEP-53 / signMessage shape) or base64 (raw).
+/// In the hashed shapes `msg` is the nonce string's UTF-8 bytes; in the raw shape
+/// the nonce is treated as a base64 payload and the decoded bytes are signed
+/// directly. The test harness uses the raw shape; real wallets produce the
+/// hashed shapes.
 pub fn verify_signature(
     public_key_strkey: &str,
-    nonce_b64: &str,
-    signature_b64: &str,
+    nonce: &str,
+    signature: &str,
 ) -> Result<(), CoreError> {
+    use sha2::{Digest, Sha256};
+
     let pk_bytes = stellar_strkey::ed25519::PublicKey::from_string(public_key_strkey)
         .map_err(|e| CoreError::Strkey(e.to_string()))?
         .0;
     let verifying_key = VerifyingKey::from_bytes(&pk_bytes)
         .map_err(|e| CoreError::Strkey(e.to_string()))?;
 
-    let nonce_bytes = B64
-        .decode(nonce_b64)
-        .map_err(|_| CoreError::InvalidSignature)?;
-    let sig_bytes = B64
-        .decode(signature_b64)
-        .map_err(|_| CoreError::InvalidSignature)?;
+    let sig_bytes = if !signature.is_empty()
+        && signature.chars().all(|c| c.is_ascii_hexdigit())
+    {
+        hex::decode(signature).map_err(|_| CoreError::InvalidSignature)?
+    } else {
+        B64.decode(signature).map_err(|_| CoreError::InvalidSignature)?
+    };
     let sig = Signature::from_slice(&sig_bytes).map_err(|_| CoreError::InvalidSignature)?;
 
-    verifying_key
-        .verify(&nonce_bytes, &sig)
-        .map_err(|_| CoreError::InvalidSignature)
+    let nonce_utf8 = nonce.as_bytes();
+
+    // SEP-43: SHA256(0x00 0x00 || len(msg) BE32 || msg)
+    let mut sep43_payload = Vec::with_capacity(6 + nonce_utf8.len());
+    sep43_payload.extend_from_slice(&[0x00, 0x00]);
+    sep43_payload.extend_from_slice(&(nonce_utf8.len() as u32).to_be_bytes());
+    sep43_payload.extend_from_slice(nonce_utf8);
+    let sep43_hash = Sha256::digest(&sep43_payload);
+    if verifying_key.verify(&sep43_hash, &sig).is_ok() {
+        return Ok(());
+    }
+
+    // SEP-53: SHA256("Stellar Signed Message:\n" + msg)
+    let sep53_prefix = b"Stellar Signed Message:\n";
+    let mut sep53_payload = Vec::with_capacity(sep53_prefix.len() + nonce_utf8.len());
+    sep53_payload.extend_from_slice(sep53_prefix);
+    sep53_payload.extend_from_slice(nonce_utf8);
+    let sep53_hash = Sha256::digest(&sep53_payload);
+    if verifying_key.verify(&sep53_hash, &sig).is_ok() {
+        return Ok(());
+    }
+
+    // Raw: signature over the base64-decoded nonce bytes (test harness shape).
+    if let Ok(raw_nonce) = B64.decode(nonce) {
+        if verifying_key.verify(&raw_nonce, &sig).is_ok() {
+            return Ok(());
+        }
+    }
+
+    Err(CoreError::InvalidSignature)
 }

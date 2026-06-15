@@ -2809,6 +2809,7 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "ed25519-dalek",
+ "hex",
  "jsonwebtoken",
  "moonlight-auth",
  "moonlight-helpers",
