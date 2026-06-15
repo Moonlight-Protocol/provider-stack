@@ -137,6 +137,20 @@ pub struct OperationsBundle {
     pub deleted_at: Option<DateTime<Utc>>,
 }
 
+/// Flattened join of a bundle row with its submitter entity's identity
+/// fields — drives the operator dashboard Operations table without a
+/// follow-up per-row lookup.
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct RecentBundleRow {
+    pub id: String,
+    pub status: BundleStatus,
+    pub channel_contract_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub entity_name: Option<String>,
+    pub entity_jurisdictions: Option<Vec<String>>,
+}
+
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 pub struct Transaction {
     pub id: String,

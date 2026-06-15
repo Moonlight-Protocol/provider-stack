@@ -350,6 +350,27 @@ impl OperationsBundleRepo {
         Ok(rows)
     }
 
+    /// Recent bundles for the operator dashboard's Operations table, with
+    /// submitter identity inlined for one-shot rendering.
+    pub async fn list_recent_with_entity(
+        &self,
+        limit: i64,
+    ) -> Result<Vec<RecentBundleRow>> {
+        let rows = sqlx::query_as::<_, RecentBundleRow>(
+            r#"SELECT b.id, b.status, b.channel_contract_id, b.created_at, b.updated_at,
+                      e.name AS entity_name, e.jurisdictions AS entity_jurisdictions
+               FROM operations_bundles b
+               LEFT JOIN entities e ON e.id = b.created_by
+               WHERE b.deleted_at IS NULL
+               ORDER BY b.created_at DESC
+               LIMIT $1"#,
+        )
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
+
     pub async fn set_status(&self, id: &str, status: BundleStatus) -> Result<()> {
         sqlx::query(r#"UPDATE operations_bundles SET status = $2, updated_at = now() WHERE id = $1"#)
             .bind(id)
