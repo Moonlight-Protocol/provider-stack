@@ -24,10 +24,9 @@ pub const EVENTS_WS_SUBPROTOCOL: &str = "moonlight.events.v1";
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
 const IDLE_TIMEOUT: Duration = Duration::from_secs(60);
 
-#[get("/providers/{pk}/events/ws")]
+#[get("/provider/events/ws")]
 pub async fn ws_events(
     state: web::Data<AppState>,
-    _path: web::Path<String>,
     req: HttpRequest,
     body: web::Payload,
 ) -> Result<HttpResponse, ApiError> {

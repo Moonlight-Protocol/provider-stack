@@ -167,9 +167,7 @@ export function entitiesRegisterView(): HTMLElement {
     nameInput.disabled = true;
 
     try {
-      const base = `${API_BASE_URL}/providers/${
-        encodeURIComponent(provider)
-      }/entities`;
+      const base = `${API_BASE_URL}/provider/entities`;
 
       // 1. Fetch challenge.
       const challengeRes = await fetch(`${base}/challenge`, {

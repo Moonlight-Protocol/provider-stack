@@ -6,8 +6,8 @@ import {
   getBundleDetail,
   getEntities,
   getMetrics,
+  getPp,
   getTreasury,
-  listPps,
   listRecentBundles,
   type MembershipInfo,
   type MetricsSnapshot,
@@ -15,7 +15,7 @@ import {
   type RecentBundleSummary,
   type TreasuryData,
 } from "../lib/api.ts";
-import { getRouteParams, navigate, onCleanup } from "../lib/router.ts";
+import { onCleanup } from "../lib/router.ts";
 import { EventsClient, type ProviderEvent } from "../lib/events-client.ts";
 import { getConnectedAddress, signTransaction } from "../lib/wallet.ts";
 import { buildFundTx, submitHorizonTx } from "../lib/stellar.ts";
@@ -87,25 +87,40 @@ function withBriefCopyFeedback(btn: HTMLElement): void {
   }, 1200);
 }
 
+/**
+ * Pick the membership we'll surface as the primary at-a-glance status: first
+ * ACTIVE, else first PENDING, else first row, else null. Single-PP shape — this
+ * is the equivalent of the old home-list-row "primary council" summary, now
+ * folded into the provider view header.
+ */
+function primaryMembership(
+  memberships: MembershipInfo[],
+): MembershipInfo | undefined {
+  return memberships.find((m) => m.status === "ACTIVE") ??
+    memberships.find((m) => m.status === "PENDING") ??
+    memberships[0];
+}
+
+function statusBadgeClass(status: string): string {
+  if (status === "ACTIVE") return "badge-active";
+  if (status === "PENDING") return "badge-pending";
+  if (status === "REJECTED") return "badge-inactive";
+  return "badge-unverified";
+}
+
 // -----------------------------------------------------------------------------
 // Top-level view
 // -----------------------------------------------------------------------------
 
 async function renderContent(): Promise<HTMLElement> {
   const root = document.createElement("div");
-  const ppPublicKey = getRouteParams().pk;
-
-  if (!ppPublicKey) {
-    navigate("/404");
-    return root;
-  }
 
   root.innerHTML =
     `<div style="color:var(--text-muted);margin:2rem 0">Loading provider…</div>`;
 
-  let pps: PpInfo[];
+  let pp: PpInfo;
   try {
-    pps = await listPps();
+    pp = await getPp();
   } catch (err) {
     root.innerHTML = `<p class="error-text">${
       escapeHtml(err instanceof Error ? err.message : String(err))
@@ -113,41 +128,34 @@ async function renderContent(): Promise<HTMLElement> {
     return root;
   }
 
-  const pp = pps.find((p) => p.publicKey === ppPublicKey);
-  if (!pp) {
-    navigate("/404");
-    return root;
-  }
-
   const memberships = pp.councilMemberships;
+  const primary = primaryMembership(memberships);
 
   let treasury: TreasuryData | null = null;
   try {
-    treasury = await getTreasury(ppPublicKey);
+    treasury = await getTreasury();
   } catch { /* best effort */ }
 
   const xlm = treasury?.balances.find((b) => b.asset_type === "native");
   const opexBalance = xlm ? `${parseFloat(xlm.balance).toFixed(2)} XLM` : "—";
   const name = pp.label || truncate(pp.publicKey);
 
-  root.innerHTML = renderTemplate(name, opexBalance, memberships);
+  root.innerHTML = renderTemplate(name, opexBalance, memberships, primary);
 
   wireHeader(root, pp);
-  wireFund(root, pp.publicKey);
+  wireFund(root);
   wireCouncils(root);
   // Best-effort: a fetch failure renders an error row, never blocks the page.
-  renderEntitiesSection(root, ppPublicKey);
+  renderEntitiesSection(root);
 
   // v2 zones (counter strip / recent bundles / activity feed / sparklines).
   const zones = setupV2Zones({
     root,
-    ppPublicKey,
     name,
     memberships,
   });
 
   const client = new EventsClient({
-    ppPublicKey,
     onEvent: (event) => zones.handleEvent(event),
     onStatus: (status) => zones.setStatus(status),
   });
@@ -172,16 +180,23 @@ function renderTemplate(
   name: string,
   opexBalance: string,
   memberships: MembershipInfo[],
+  primary: MembershipInfo | undefined,
 ): string {
   const councilCards = memberships.length === 0
     ? `<div style="color:var(--text-muted)">No council memberships yet.</div>`
     : memberships.map((m) => renderCouncilCard(m)).join("");
 
+  const primaryBadge = primary
+    ? `<span class="badge ${statusBadgeClass(primary.status)}" title="${
+      escapeHtml(primary.councilName ?? "Council")
+    }">${escapeHtml(primary.status)}</span>`
+    : `<span class="badge badge-unverified" title="No council memberships">NO COUNCIL</span>`;
+
   return `
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1.5rem">
       <div style="display:flex;align-items:center;gap:0.5rem">
-        <a href="#/" class="icon-btn" title="Back" style="color:var(--text)"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5"/><path d="M12 19l-7-7 7-7"/></svg></a>
         <h2 style="margin:0">${escapeHtml(name)}</h2>
+        ${primaryBadge}
       </div>
       <div style="display:flex;align-items:center;gap:0.25rem">
         <button id="copy-provider-url" class="icon-btn" title="Copy provider URL"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg></button>
@@ -324,16 +339,13 @@ function entityStatusBadge(status: string): string {
 const ENTITY_COPY_ICON =
   `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>`;
 
-async function renderEntitiesSection(
-  root: HTMLElement,
-  ppPublicKey: string,
-): Promise<void> {
+async function renderEntitiesSection(root: HTMLElement): Promise<void> {
   const body = root.querySelector("#entities-body") as HTMLElement | null;
   if (!body) return;
 
   let entities: EntityInteraction[];
   try {
-    entities = await getEntities(ppPublicKey);
+    entities = await getEntities();
   } catch (err) {
     body.innerHTML = `<span class="error-text">${
       escapeHtml(
@@ -411,7 +423,7 @@ function wireHeader(root: HTMLElement, pp: PpInfo): void {
   });
 }
 
-function wireFund(root: HTMLElement, ppPublicKey: string): void {
+function wireFund(root: HTMLElement): void {
   const fundBtn = root.querySelector("#fund-btn") as HTMLButtonElement;
   const errEl = root.querySelector("#fund-error") as HTMLElement;
   fundBtn?.addEventListener("click", async () => {
@@ -422,12 +434,11 @@ function wireFund(root: HTMLElement, ppPublicKey: string): void {
     if (!amount) return;
     fundBtn.disabled = true;
     errEl.hidden = true;
-    console.debug("[fund] click — destination", ppPublicKey, "amount", amount);
     try {
+      const pp = await getPp();
+      const ppPublicKey = pp.publicKey;
       const source = getConnectedAddress();
-      console.debug("[fund] source wallet address", source);
       if (!source) throw new Error("Wallet not connected");
-      console.debug("[fund] building tx …");
       const xdr = await buildFundTx(source, ppPublicKey, amount.trim());
       console.debug("[fund] built tx xdr (first 80 chars)", xdr.slice(0, 80));
       const signed = await signTransaction(xdr);
@@ -497,7 +508,6 @@ const FEED_LABELS: Record<ProviderEvent["kind"], string> = {
 
 interface SetupOpts {
   root: HTMLElement;
-  ppPublicKey: string;
   name: string;
   memberships: MembershipInfo[];
 }
@@ -509,7 +519,7 @@ interface ZoneHandle {
 }
 
 function setupV2Zones(opts: SetupOpts): ZoneHandle {
-  const { root, ppPublicKey, memberships } = opts;
+  const { root, memberships } = opts;
 
   const feedEl = root.querySelector("#activity-feed") as HTMLElement | null;
   const feedEmptyEl = root.querySelector(
@@ -764,7 +774,7 @@ function setupV2Zones(opts: SetupOpts): ZoneHandle {
   async function pollMetrics(): Promise<void> {
     if (stopped) return;
     try {
-      const data = await getMetrics(ppPublicKey, SPARKLINE_RANGE_MIN);
+      const data = await getMetrics(SPARKLINE_RANGE_MIN);
       if (!stopped) applyMetrics(data);
     } catch (err) {
       console.warn("[v2-zones] metrics poll failed", err);
@@ -821,7 +831,7 @@ function setupV2Zones(opts: SetupOpts): ZoneHandle {
   function previewEnsureDetail(bundleId: string): void {
     if (bundleDetails.has(bundleId)) return;
     bundleDetails.set(bundleId, "loading");
-    getBundleDetail(ppPublicKey, bundleId).then(
+    getBundleDetail(bundleId).then(
       (d) => {
         bundleDetails.set(bundleId, d);
         // Enrich the row with entity data fetched from the detail endpoint —
@@ -908,7 +918,7 @@ function setupV2Zones(opts: SetupOpts): ZoneHandle {
 
   async function previewLoadHistorical(): Promise<void> {
     try {
-      const recent = await listRecentBundles(ppPublicKey, PREVIEW_TABLE_LIMIT);
+      const recent = await listRecentBundles(PREVIEW_TABLE_LIMIT);
       for (const r of recent) {
         const ts = new Date(r.updatedAt).getTime();
         previewUpsert(

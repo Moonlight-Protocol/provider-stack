@@ -2,9 +2,8 @@ import { renderNav } from "@moonlight/ui/nav";
 import { pageLayout } from "@moonlight/ui/layout";
 import {
   checkMembershipStatus,
+  getPp,
   isAuthenticated,
-  listPps,
-  type PpInfo,
 } from "../lib/api.ts";
 import { getConnectedAddress, isMasterSeedReady } from "../lib/wallet.ts";
 import { isAllowed } from "../lib/config.ts";
@@ -16,47 +15,38 @@ declare const __APP_VERSION__: string;
 const BANNER_ID = "membership-banner";
 
 /**
- * Background membership check for ACTIVE PPs.
+ * Background membership check for the single PP.
  * Detects revocations (ACTIVE → not ACTIVE) and shows a banner.
  * If a revocation banner is already showing but the PP is active again, removes it.
  */
 async function checkMemberships(wrapper: HTMLElement) {
-  let pps: PpInfo[];
+  let pp;
   try {
-    pps = await listPps();
+    pp = await getPp();
   } catch {
     return;
   }
 
-  const activePps = pps.filter((pp) =>
-    pp.councilMemberships.some((m) => m.status === "ACTIVE")
+  const activeMembership = pp.councilMemberships.find(
+    (m) => m.status === "ACTIVE",
   );
-  if (activePps.length === 0) return;
+  if (!activeMembership) return;
 
-  let revoked = false;
-  for (const pp of activePps) {
-    try {
-      const result = await checkMembershipStatus(pp.publicKey);
-      if (result !== "ACTIVE") {
-        const activeMembership = pp.councilMemberships.find((m) =>
-          m.status === "ACTIVE"
-        );
-        showBanner(
-          wrapper,
-          `Your provider "${pp.label || pp.publicKey}" was removed from ${
-            activeMembership?.councilName || "the council"
-          }.`,
-        );
-        revoked = true;
-        break;
-      }
-    } catch { /* silently fail */ }
-  }
+  try {
+    const result = await checkMembershipStatus();
+    if (result !== "ACTIVE") {
+      showBanner(
+        wrapper,
+        `Your provider "${pp.label || pp.publicKey}" was removed from ${
+          activeMembership.councilName || "the council"
+        }.`,
+      );
+      return;
+    }
+  } catch { /* silently fail */ }
 
-  // If no revocations found but a banner is showing, the PP was re-accepted — remove it
-  if (!revoked) {
-    document.getElementById(BANNER_ID)?.remove();
-  }
+  // No revocation — drop any stale banner from a previous tick.
+  document.getElementById(BANNER_ID)?.remove();
 }
 
 function showBanner(wrapper: HTMLElement, message: string) {

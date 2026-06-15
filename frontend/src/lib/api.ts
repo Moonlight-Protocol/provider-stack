@@ -153,39 +153,11 @@ export interface PpInfo {
   councilMemberships: MembershipInfo[];
 }
 
-export async function registerPp(
-  secretKey: string,
-  derivationIndex: number,
-  label?: string,
-): Promise<{ publicKey: string }> {
-  const res = await platformFetch("/dashboard/pp/register", {
-    method: "POST",
-    body: JSON.stringify({ secretKey, derivationIndex, label }),
-  });
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({}));
-    throw new Error(body.message || "Failed to register PP");
-  }
+export async function getPp(): Promise<PpInfo> {
+  const res = await platformFetch("/dashboard/pp");
+  if (!res.ok) throw new Error("Failed to fetch provider");
   const { data } = await res.json();
   return data;
-}
-
-export async function listPps(): Promise<PpInfo[]> {
-  const res = await platformFetch("/dashboard/pp/list");
-  if (!res.ok) throw new Error("Failed to list PPs");
-  const { data } = await res.json();
-  return data;
-}
-
-export async function deletePp(publicKey: string): Promise<void> {
-  const res = await platformFetch(
-    `/providers/${encodeURIComponent(publicKey)}`,
-    { method: "DELETE" },
-  );
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({}));
-    throw new Error(body.message || "Failed to delete provider");
-  }
 }
 
 // --- Council (UC2) ---
@@ -226,7 +198,6 @@ export async function joinCouncil(data: {
   councilId: string;
   councilName?: string;
   councilPublicKey?: string;
-  ppPublicKey: string;
   signedEnvelope: {
     payload: unknown;
     signature: string;
@@ -234,12 +205,11 @@ export async function joinCouncil(data: {
     timestamp: number;
   };
 }): Promise<{ joinRequestId: string; status: string }> {
-  const { ppPublicKey, ...rest } = data;
   const res = await platformFetch(
-    `/providers/${encodeURIComponent(ppPublicKey)}/council/join`,
+    "/provider/council/join",
     {
       method: "POST",
-      body: JSON.stringify(rest),
+      body: JSON.stringify(data),
     },
   );
   if (!res.ok) {
@@ -263,32 +233,25 @@ export interface CouncilMembership {
   createdAt: string;
 }
 
-export async function getCouncilMembership(
-  ppPublicKey: string,
-): Promise<CouncilMembership | null> {
-  const res = await platformFetch(
-    `/providers/${encodeURIComponent(ppPublicKey)}/council/membership`,
-  );
+export async function getCouncilMembership(): Promise<CouncilMembership | null> {
+  const res = await platformFetch("/provider/council/membership");
   if (!res.ok) throw new Error("Failed to retrieve membership");
   const { data } = await res.json();
   return data;
 }
 
 /**
- * Sync a PP's membership status via the provider-platform.
+ * Sync the PP's membership status via the provider-platform.
  * The platform queries the council and updates its local DB.
  * Returns the synced status.
  */
-export async function checkMembershipStatus(
-  ppPublicKey: string,
-): Promise<"ACTIVE" | "PENDING" | "REJECTED"> {
-  const res = await platformFetch(
-    `/providers/${encodeURIComponent(ppPublicKey)}/council/membership`,
-    {
-      method: "POST",
-      body: JSON.stringify({}),
-    },
-  );
+export async function checkMembershipStatus(): Promise<
+  "ACTIVE" | "PENDING" | "REJECTED"
+> {
+  const res = await platformFetch("/provider/council/membership", {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
   if (!res.ok) return "PENDING";
   const { data } = await res.json();
   return data?.status ?? "PENDING";
@@ -303,12 +266,8 @@ export interface TreasuryData {
   lastModifiedLedger: number;
 }
 
-export async function getTreasury(
-  ppPublicKey: string,
-): Promise<TreasuryData> {
-  const res = await platformFetch(
-    `/providers/${encodeURIComponent(ppPublicKey)}/treasury`,
-  );
+export async function getTreasury(): Promise<TreasuryData> {
+  const res = await platformFetch("/provider/treasury");
   if (!res.ok) throw new Error("Failed to fetch treasury info");
   const { data } = await res.json();
   return data;
@@ -333,20 +292,14 @@ export interface MetricsSnapshot {
 }
 
 export interface MetricsResponse {
-  ppPublicKey: string;
   rangeMin: number;
   since: string;
   snapshots: MetricsSnapshot[];
 }
 
-export async function getMetrics(
-  ppPublicKey: string,
-  rangeMin: number,
-): Promise<MetricsResponse> {
+export async function getMetrics(rangeMin: number): Promise<MetricsResponse> {
   const qs = new URLSearchParams({ rangeMin: String(rangeMin) });
-  const res = await platformFetch(
-    `/providers/${encodeURIComponent(ppPublicKey)}/metrics?${qs}`,
-  );
+  const res = await platformFetch(`/provider/metrics?${qs}`);
   if (!res.ok) throw new Error("Failed to fetch metrics");
   const body = await res.json();
   return body.data as MetricsResponse;
@@ -363,12 +316,8 @@ export interface EntityInteraction {
   updatedAt: string;
 }
 
-export async function getEntities(
-  ppPublicKey: string,
-): Promise<EntityInteraction[]> {
-  const res = await platformFetch(
-    `/providers/${encodeURIComponent(ppPublicKey)}/entities`,
-  );
+export async function getEntities(): Promise<EntityInteraction[]> {
+  const res = await platformFetch("/provider/entities");
   if (!res.ok) throw new Error("Failed to fetch entities");
   const { data } = await res.json();
   return data as EntityInteraction[];
@@ -397,14 +346,9 @@ export interface BundleDetail {
   amount: string | null;
 }
 
-export async function getBundleDetail(
-  ppPublicKey: string,
-  bundleId: string,
-): Promise<BundleDetail> {
+export async function getBundleDetail(bundleId: string): Promise<BundleDetail> {
   const res = await platformFetch(
-    `/providers/${encodeURIComponent(ppPublicKey)}/bundles/${
-      encodeURIComponent(bundleId)
-    }`,
+    `/provider/bundles/${encodeURIComponent(bundleId)}`,
   );
   if (!res.ok) throw new Error("Failed to fetch bundle detail");
   const body = await res.json();
@@ -423,13 +367,10 @@ export interface RecentBundleSummary {
 }
 
 export async function listRecentBundles(
-  ppPublicKey: string,
   limit: number,
 ): Promise<RecentBundleSummary[]> {
   const qs = new URLSearchParams({ limit: String(limit) });
-  const res = await platformFetch(
-    `/providers/${encodeURIComponent(ppPublicKey)}/bundles?${qs}`,
-  );
+  const res = await platformFetch(`/provider/bundles?${qs}`);
   if (!res.ok) throw new Error("Failed to list recent bundles");
   const body = await res.json();
   return (body.data as { bundles: RecentBundleSummary[] }).bundles;

@@ -6,14 +6,7 @@ import { initTracer } from "./lib/tracer.ts";
 import { OTEL_AUTH, OTEL_ENDPOINT } from "./lib/config.ts";
 
 import { loginView } from "./views/login.ts";
-import { homeView } from "./views/home.ts";
 import { providerView } from "./views/provider.ts";
-import { recoverView } from "./views/recover.ts";
-
-// Setup flow
-import { metadataView } from "./views/setup/metadata.ts";
-import { fundView } from "./views/setup/fund.ts";
-import { joinView } from "./views/setup/join.ts";
 
 // Public KYC/KYB submission — no auth, isolated from operator session
 import { entitiesRegisterView } from "./views/entities/register.ts";
@@ -22,23 +15,17 @@ import { entitiesRegisterView } from "./views/entities/register.ts";
 initAnalytics();
 initTracer({ endpoint: OTEL_ENDPOINT, auth: OTEL_AUTH });
 
-// Register routes
+// Single-PP stack: one operator, one provider. There is no provider list and
+// no per-PP URL — the provider view IS the home view, mounted at "/".
 route("/login", loginView);
-route("/home", homeView);
-route("/provider/:pk", providerView);
-route("/setup/metadata", metadataView);
-route("/setup/fund", fundView);
-route("/setup/join", joinView);
-route("/recover", recoverView);
 route("/entities/register", entitiesRegisterView);
 
-// Root — redirect based on auth state
+// Root — render the provider view directly when authed, otherwise login.
 route("/", () => {
   if (isAuthenticated() && isMasterSeedReady()) {
-    navigate("/home");
-  } else {
-    navigate("/login");
+    return providerView();
   }
+  navigate("/login");
   return document.createElement("div");
 });
 

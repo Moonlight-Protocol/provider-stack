@@ -132,14 +132,12 @@ pub struct JoinPayload {
     pub status: &'static str,
 }
 
-#[post("/providers/{pk}/council/join")]
+#[post("/provider/council/join")]
 pub async fn post_join(
     state: web::Data<AppState>,
     _auth: OperatorAuth,
-    path: web::Path<String>,
     body: web::Json<JoinReq>,
 ) -> Result<impl Responder, ApiError> {
-    let _pk = path.into_inner(); // single-PP shape — OperatorAuth already gates this
     let req = body.into_inner();
 
     let parsed = Url::parse(&req.council_url)
@@ -240,11 +238,10 @@ pub struct MembershipPayload {
     pub claimed_jurisdictions: Option<String>,
 }
 
-#[get("/providers/{pk}/council/membership")]
+#[get("/provider/council/membership")]
 pub async fn get_membership(
     state: web::Data<AppState>,
     _auth: OperatorAuth,
-    _path: web::Path<String>,
 ) -> Result<impl Responder, ApiError> {
     let repo = CouncilMembershipRepo::new(state.pool.clone());
     let memberships = repo.list_active().await?;
@@ -272,11 +269,10 @@ pub struct SyncPayload {
     pub updated: usize,
 }
 
-#[post("/providers/{pk}/council/membership")]
+#[post("/provider/council/membership")]
 pub async fn post_membership(
     state: web::Data<AppState>,
     _auth: OperatorAuth,
-    _path: web::Path<String>,
 ) -> Result<impl Responder, ApiError> {
     let repo = CouncilMembershipRepo::new(state.pool.clone());
     let memberships = repo.list_active().await?;

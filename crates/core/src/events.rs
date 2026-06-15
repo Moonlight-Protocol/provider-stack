@@ -203,6 +203,10 @@ impl EventBroadcaster {
             *g = label;
         }
     }
+
+    pub fn current_label(&self) -> Option<String> {
+        self.pp_label.read().ok().and_then(|g| g.clone())
+    }
 }
 
 /// Summary of an operations bundle decoded from its MLXDR slots — drives the

@@ -33,12 +33,11 @@ pub struct SubmitPayload {
     pub status: &'static str,
 }
 
-#[post("/providers/{pk}/entity/bundles")]
+#[post("/provider/entity/bundles")]
 #[tracing::instrument(name = "P_AddOperationsBundle", skip_all)]
 pub async fn post_submit(
     state: web::Data<AppState>,
     auth: EntityAuth,
-    _path: web::Path<String>,
     body: web::Json<SubmitReq>,
 ) -> Result<impl Responder, ApiError> {
     // Entity-approval gate (mirrors provider-platform/src/core/service/bundle/add-bundle.process.ts:
@@ -159,11 +158,10 @@ pub struct EntityBundlesList {
     pub bundles: Vec<JsonValue>,
 }
 
-#[get("/providers/{pk}/entity/bundles")]
+#[get("/provider/entity/bundles")]
 pub async fn list_entity(
     _state: web::Data<AppState>,
     _auth: EntityAuth,
-    _path: web::Path<String>,
 ) -> Result<impl Responder, ApiError> {
     Ok::<_, ApiError>(
         HttpResponse::Ok().json(Data::new(EntityBundlesList { bundles: vec![] })),
@@ -184,13 +182,13 @@ pub struct BundleDetail {
     pub failure_detail: Option<JsonValue>,
 }
 
-#[get("/providers/{pk}/entity/bundles/{bundle_id}")]
+#[get("/provider/entity/bundles/{bundle_id}")]
 pub async fn get_entity_bundle(
     state: web::Data<AppState>,
     _auth: EntityAuth,
-    path: web::Path<(String, String)>,
+    path: web::Path<String>,
 ) -> Result<impl Responder, ApiError> {
-    let (_pk, bundle_id) = path.into_inner();
+    let bundle_id = path.into_inner();
     let repo = OperationsBundleRepo::new(state.pool.clone());
     match repo.find_by_id(&bundle_id).await? {
         Some(b) => {

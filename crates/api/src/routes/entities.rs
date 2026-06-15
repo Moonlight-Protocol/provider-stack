@@ -11,8 +11,6 @@ use crate::state::AppState;
 use crate::middleware_auth::OperatorAuth;
 use actix_web::{get, post, web, HttpResponse, Responder};
 use chrono::{DateTime, Utc};
-use ed25519_dalek::SigningKey;
-use provider_stack_core::auth::sep10::signing_key_from_seed;
 use provider_stack_core::auth::sep43;
 use provider_stack_persistence::{AccountRepo, AccountType, EntityRepo, EntityStatus, WalletUserRepo};
 use serde::{Deserialize, Serialize};
@@ -30,13 +28,11 @@ pub struct ChallengePayload {
     pub nonce: String,
 }
 
-#[post("/providers/{pk}/entities/challenge")]
+#[post("/provider/entities/challenge")]
 pub async fn post_challenge(
     state: web::Data<AppState>,
-    path: web::Path<String>,
     body: web::Json<ChallengeReq>,
 ) -> Result<impl Responder, ApiError> {
-    ensure_pk_is_this_pp(&state, &path)?;
     let nonce = state.nonces.issue(&body.pubkey);
     Ok(HttpResponse::Ok().json(Data::new(ChallengePayload { nonce })))
 }
@@ -64,14 +60,11 @@ pub struct RegisterPayload {
     pub status: &'static str,
 }
 
-#[post("/providers/{pk}/entities")]
+#[post("/provider/entities")]
 pub async fn post_register(
     state: web::Data<AppState>,
-    path: web::Path<String>,
     body: web::Json<RegisterReq>,
 ) -> Result<impl Responder, ApiError> {
-    ensure_pk_is_this_pp(&state, &path)?;
-
     sep43::verify_signature(&body.pubkey, &body.signed_challenge.nonce, &body.signed_challenge.signature)
         .map_err(|_| ApiError::Unauthorized)?;
 
@@ -130,18 +123,6 @@ pub async fn post_register(
     })))
 }
 
-fn ensure_pk_is_this_pp(state: &AppState, pk: &str) -> Result<(), ApiError> {
-    let signing: SigningKey = signing_key_from_seed(&state.config.pp_secret_key)?;
-    let this_pp = format!(
-        "{}",
-        stellar_strkey::ed25519::PublicKey(signing.verifying_key().to_bytes())
-    );
-    if pk != this_pp {
-        return Err(ApiError::NotFound);
-    }
-    Ok(())
-}
-
 /// One row of the operator-facing entities view — see PR #118
 /// (`provider-platform/src/http/v1/entities/get.ts`).
 #[derive(Serialize)]
@@ -155,19 +136,15 @@ pub struct EntityListRow {
     pub updated_at: DateTime<Utc>,
 }
 
-/// `GET /api/v1/providers/:pp/entities` — operator view of every entity that
-/// has interacted with this PP (KYC-approved + unauthorized pubkeys recorded
-/// at the SEP-10 connect + bundle-submit 403 gates). Single-PP shape: the
-/// URL `pp` must match the env-configured PP, otherwise 404 — matching the
-/// Deno `requirePpOwnership` behaviour.
-#[get("/providers/{pk}/entities")]
+/// `GET /api/v1/provider/entities` — operator view of every entity that has
+/// interacted with this PP (KYC-approved + unauthorized pubkeys recorded at
+/// the SEP-10 connect + bundle-submit 403 gates).
+#[get("/provider/entities")]
 #[tracing::instrument(name = "P_ListEntities", skip_all)]
 pub async fn get_list(
     state: web::Data<AppState>,
     _auth: OperatorAuth,
-    path: web::Path<String>,
 ) -> Result<impl Responder, ApiError> {
-    ensure_pk_is_this_pp(&state, &path)?;
     let entities = provider_stack_persistence::EntityRepo::new(state.pool.clone());
     let rows = entities.list_all_by_updated().await?;
     let payload: Vec<EntityListRow> = rows
