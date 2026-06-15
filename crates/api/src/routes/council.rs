@@ -267,6 +267,9 @@ pub async fn get_membership(
 pub struct SyncPayload {
     pub memberships: usize,
     pub updated: usize,
+    /// The newest membership's status post-sync — what the SPA's revocation
+    /// check reads. None if there are no memberships.
+    pub status: Option<String>,
 }
 
 #[post("/provider/council/membership")]
@@ -336,9 +339,22 @@ pub async fn post_membership(
         }
     }
 
+    // Re-read after the writes so the response reflects the post-sync truth.
+    let latest_status = repo
+        .list_active()
+        .await?
+        .first()
+        .map(|m| match m.status {
+            CouncilMembershipStatus::Active => "ACTIVE",
+            CouncilMembershipStatus::Pending => "PENDING",
+            CouncilMembershipStatus::Rejected => "REJECTED",
+        })
+        .map(str::to_string);
+
     Ok(HttpResponse::Ok().json(Data::new(SyncPayload {
         memberships: memberships.len(),
         updated,
+        status: latest_status,
     })))
 }
 
