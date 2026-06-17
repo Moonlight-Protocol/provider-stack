@@ -140,6 +140,15 @@ pub async fn post_join(
 ) -> Result<impl Responder, ApiError> {
     let req = body.into_inner();
 
+    // The label travels into the per-event scope (the broadcaster stamps it on
+    // every emitted ProviderEvent). It was previously seeded by the deleted
+    // POST /dashboard/pp/register call; now it rides along with the join,
+    // matching the single-PP truth that the only PP this stack runs IS the
+    // env-pinned one and any label belongs to it.
+    if let Some(ref label) = req.label {
+        state.events.set_label(Some(label.clone()));
+    }
+
     let parsed = Url::parse(&req.council_url)
         .map_err(|_| ApiError::BadRequest("invalid council_url".into()))?;
     enforce_url_safety(&parsed, &state.config.mode)?;
