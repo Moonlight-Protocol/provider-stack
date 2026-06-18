@@ -47,55 +47,9 @@ export function isWalletConnected(): boolean {
   return !!getConnectedAddress();
 }
 
-// --- Master seed (sessionStorage — persists across refreshes, cleared on tab close) ---
-const SEED_KEY = "master_seed";
-let masterSeed: Uint8Array | null = null;
-
-// Restore from sessionStorage on module load
-{
-  const stored = sessionStorage.getItem(SEED_KEY);
-  if (stored) {
-    try {
-      masterSeed = Uint8Array.from(atob(stored), (c) => c.charCodeAt(0));
-    } catch {
-      // Corrupted base64 — clear and proceed without seed
-      sessionStorage.removeItem(SEED_KEY);
-      masterSeed = null;
-    }
-  }
-}
-
-/**
- * Derive the master seed from a single wallet signature.
- * Must be called once per session before any key derivation.
- */
-export async function initMasterSeed(): Promise<void> {
-  const signature = await signMessage("Moonlight: Derive server key");
-  if (!signature || signature.length < 10) {
-    throw new Error("Invalid signature: too short or empty");
-  }
-  const normalized = signature.replace(/-/g, "+").replace(/_/g, "/");
-  const sigBytes = Uint8Array.from(atob(normalized), (c) => c.charCodeAt(0));
-  masterSeed = new Uint8Array(await crypto.subtle.digest("SHA-256", sigBytes));
-  sessionStorage.setItem(SEED_KEY, btoa(String.fromCharCode(...masterSeed)));
-}
-
-export function getMasterSeed(): Uint8Array {
-  if (!masterSeed) {
-    throw new Error("Master seed not initialized. Sign in first.");
-  }
-  return masterSeed;
-}
-
-export function isMasterSeedReady(): boolean {
-  return masterSeed !== null;
-}
-
 export function clearSession(): void {
   connectedAddress = null;
-  masterSeed = null;
   localStorage.removeItem(STORAGE_KEY);
-  sessionStorage.removeItem(SEED_KEY);
 }
 
 export function getNetworkPassphrase(): string {
@@ -142,29 +96,6 @@ export async function signMessage(message: string): Promise<string> {
     throw new Error("Wallet returned an empty signature");
   }
   return result.signedMessage;
-}
-
-/**
- * Derive a deterministic PP keypair from the master seed.
- * SHA-256(masterSeed + "pp" + index) → Ed25519 seed.
- * No wallet interaction — pure math.
- */
-export async function derivePpKeypair(
-  index: number,
-): Promise<{ publicKey: string; secretKey: string }> {
-  const seed = getMasterSeed();
-  const encoder = new TextEncoder();
-  const input = new Uint8Array([
-    ...seed,
-    ...encoder.encode("pp"),
-    ...encoder.encode(String(index)),
-  ]);
-  const derived = new Uint8Array(await crypto.subtle.digest("SHA-256", input));
-
-  const { Keypair } = await import("stellar-base");
-  const { Buffer } = await import("buffer");
-  const keypair = Keypair.fromRawEd25519Seed(Buffer.from(derived));
-  return { publicKey: keypair.publicKey(), secretKey: keypair.secret() };
 }
 
 /**

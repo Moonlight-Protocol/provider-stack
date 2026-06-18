@@ -1,7 +1,6 @@
 import { navigate, route, startRouter } from "./lib/router.ts";
 import { initAnalytics } from "./lib/analytics.ts";
 import { isAuthenticated } from "./lib/api.ts";
-import { isMasterSeedReady } from "./lib/wallet.ts";
 import { initTracer } from "./lib/tracer.ts";
 import { OTEL_AUTH, OTEL_ENDPOINT } from "./lib/config.ts";
 
@@ -22,7 +21,7 @@ route("/entities/register", entitiesRegisterView);
 
 // Root — render the provider view directly when authed, otherwise login.
 route("/", () => {
-  if (isAuthenticated() && isMasterSeedReady()) {
+  if (isAuthenticated()) {
     return providerView();
   }
   navigate("/login");

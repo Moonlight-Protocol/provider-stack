@@ -6,8 +6,8 @@
  *     sessionStorage, IndexedDB, or cookies for any artifact (address,
  *     signed challenge, derived data).
  *   - Never reads or writes the operator-auth keys (provider_admin_address,
- *     master_seed, console_token). Existing operator sessions on other routes
- *     are unaffected by KYC-route activity, and vice versa.
+ *     console_token). Existing operator sessions on other routes are
+ *     unaffected by KYC-route activity, and vice versa.
  *   - Refresh / navigation away purges all state. The user must reconnect.
  *
  * The Stellar Wallets Kit is a static SDK shared with operator-auth code, but

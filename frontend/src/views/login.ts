@@ -8,8 +8,6 @@ import {
   clearSession,
   connectWallet,
   getConnectedAddress,
-  initMasterSeed,
-  isMasterSeedReady,
   isWalletConnected,
 } from "../lib/wallet.ts";
 import { capture, identify } from "../lib/analytics.ts";
@@ -38,7 +36,7 @@ function inviteWaitlistView(address: string): HTMLElement {
 
 export function loginView(): HTMLElement {
   const existingAddr = getConnectedAddress();
-  if (isAuthenticated() && isMasterSeedReady()) {
+  if (isAuthenticated()) {
     if (existingAddr && !isAllowed(existingAddr)) {
       return inviteWaitlistView(existingAddr);
     }
@@ -137,11 +135,6 @@ export function loginView(): HTMLElement {
       try {
         const { traceId } = startTrace();
         await withSpan("provider.login", traceId, async () => {
-          btn.textContent = "Setting up...";
-          await initMasterSeed();
-          // Freighter rejects consecutive signMessage calls without a delay between them.
-          // initMasterSeed signs once, and authenticate() signs again immediately after.
-          await new Promise((r) => setTimeout(r, 1000));
           btn.textContent = "Authenticating...";
           await authenticate();
         });

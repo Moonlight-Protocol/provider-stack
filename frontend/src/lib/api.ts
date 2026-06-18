@@ -146,7 +146,6 @@ export interface MembershipInfo {
 
 export interface PpInfo {
   publicKey: string;
-  derivationIndex: number;
   label: string | null;
   isActive: boolean;
   createdAt: string;

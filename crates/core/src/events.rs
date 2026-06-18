@@ -154,9 +154,8 @@ impl ProviderEvent {
 }
 
 /// Shared scope state — `pp_public_key` is fixed at boot from `PP_SECRET_KEY`,
-/// `pp_label` is updated each time the dashboard `/dashboard/pp/register` compat
-/// shim is hit (the harness sets "Testnet E2E PP", browser console SPAs set
-/// whatever the operator typed).
+/// `pp_label` is set by `POST /provider/council/join` (single-PP: the only
+/// label that matters is the one the operator carries into a council join).
 #[derive(Clone)]
 pub struct EventBroadcaster {
     tx: broadcast::Sender<ProviderEvent>,

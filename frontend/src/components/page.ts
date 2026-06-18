@@ -5,7 +5,7 @@ import {
   getPp,
   isAuthenticated,
 } from "../lib/api.ts";
-import { getConnectedAddress, isMasterSeedReady } from "../lib/wallet.ts";
+import { getConnectedAddress } from "../lib/wallet.ts";
 import { isAllowed } from "../lib/config.ts";
 import { navigate } from "../lib/router.ts";
 import { logout } from "../lib/auth.ts";
@@ -75,7 +75,7 @@ export function page(
   return async () => {
     const addr = getConnectedAddress();
     if (
-      !isAuthenticated() || !isMasterSeedReady() || (addr && !isAllowed(addr))
+      !isAuthenticated() || (addr && !isAllowed(addr))
     ) {
       navigate("/login");
       return document.createElement("div");
