@@ -85,6 +85,29 @@ pub async fn post_submit(
             .map_err(|e| ApiError::BadRequest(format!("operationsMLXDR: {e}")))?
     };
 
+    // UC6 withdraw-only gate. The council can disable a privacy-channel via
+    // an on-chain channel_state_changed event; the event_watcher mirrors
+    // that into channel_states. On a disabled channel, the only bundle we
+    // accept is "withdraw-only" — at least one withdraw, zero deposits.
+    // Send-only bundles (spends + creates without a withdraw) and any
+    // deposit bundle are rejected with 403 CHANNEL_DISABLED. Mirrors
+    // provider-platform/src/core/service/bundle/add-bundle.process.ts +
+    // bundle.service.ts::isWithdrawOnlyBundle.
+    if let Some(ref ch) = channel_contract_id {
+        let channels = provider_stack_persistence::ChannelStateRepo::new(state.pool.clone());
+        if channels.is_disabled(ch).await? {
+            let withdraw_only = classified.deposit.is_empty()
+                && !classified.withdraw.is_empty();
+            if !withdraw_only {
+                tracing::info!(
+                    channel = %ch,
+                    "rejecting non-withdraw bundle on disabled channel"
+                );
+                return Err(ApiError::Forbidden);
+            }
+        }
+    }
+
     // Fetch on-chain balances for Spend UTXOs (if any).
     let spend_balances: Vec<i128> = if !spend_utxos.is_empty() {
         let channel = channel_contract_id

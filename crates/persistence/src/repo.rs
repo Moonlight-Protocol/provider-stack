@@ -782,3 +782,55 @@ impl EventWatcherStateRepo {
         Ok(())
     }
 }
+
+// ---- channel_states (UC6 asset-lifecycle) ----
+
+pub struct ChannelStateRepo {
+    pool: PgPool,
+}
+
+impl ChannelStateRepo {
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
+    }
+
+    /// Apply the council's confirmed enable/disable for one privacy-channel.
+    /// Driven by `channel_state_changed` events (live deltas) and the boot /
+    /// out-of-retention convergence query. The optional ledger lets the live
+    /// path stamp where the decision landed; the query path passes `None`.
+    pub async fn apply_state(
+        &self,
+        channel_contract_id: &str,
+        is_disabled: bool,
+        last_event_ledger: Option<i64>,
+    ) -> Result<()> {
+        sqlx::query(
+            r#"INSERT INTO channel_states (channel_contract_id, is_disabled, last_event_ledger)
+               VALUES ($1, $2, $3)
+               ON CONFLICT (channel_contract_id) DO UPDATE
+                 SET is_disabled       = EXCLUDED.is_disabled,
+                     last_event_ledger = COALESCE(EXCLUDED.last_event_ledger, channel_states.last_event_ledger),
+                     updated_at        = now()"#,
+        )
+        .bind(channel_contract_id)
+        .bind(is_disabled)
+        .bind(last_event_ledger)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Returns true when the council has disabled this privacy-channel and
+    /// the standin should reject any new deposits/sends to it. Defaults to
+    /// false for unknown channels (fail-open: a channel we've never recorded
+    /// state for is treated as enabled).
+    pub async fn is_disabled(&self, channel_contract_id: &str) -> Result<bool> {
+        let row: Option<(bool,)> = sqlx::query_as(
+            r#"SELECT is_disabled FROM channel_states WHERE channel_contract_id = $1"#,
+        )
+        .bind(channel_contract_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(|(v,)| v).unwrap_or(false))
+    }
+}

@@ -137,6 +137,19 @@ pub struct OperationsBundle {
     pub deleted_at: Option<DateTime<Utc>>,
 }
 
+/// Local view of a council's asset-channel lifecycle decision (UC6).
+/// `is_disabled = true` means the council has disabled this privacy-channel
+/// on-chain; the standin enforces withdraw-only on bundle submission. State
+/// is driven by `channel_state_changed` events on channel-auth, plus
+/// convergence-by-query from the council on boot / out-of-retention.
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct ChannelStateRow {
+    pub channel_contract_id: String,
+    pub is_disabled: bool,
+    pub last_event_ledger: Option<i64>,
+    pub updated_at: DateTime<Utc>,
+}
+
 /// Flattened join of a bundle row with its submitter entity's identity
 /// fields — drives the operator dashboard Operations table without a
 /// follow-up per-row lookup.
