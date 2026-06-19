@@ -163,10 +163,12 @@ async fn ws_subprotocol_negotiated_event_arrives_and_ping_is_answered() {
     assert_eq!(chosen, EVENTS_WS_SUBPROTOCOL, "server picked the wrong subprotocol");
 
     // (2) Broadcast an event; client must receive matching Text within 1 s.
-    events.send(ProviderEvent::BundleCompleted {
-        bundle_id: "BUNDLE-WS-1".into(),
-        tx_hash: "TX-WS-1".into(),
-    });
+    events.send(ProviderEvent::verifier_bundle_completed(
+        events.current_scope(),
+        "TX-WS-1",
+        &["BUNDLE-WS-1".to_string()],
+        None,
+    ));
 
     let frame = timeout(Duration::from_secs(1), ws_stream.next())
         .await
@@ -177,9 +179,9 @@ async fn ws_subprotocol_negotiated_event_arrives_and_ping_is_answered() {
     match frame {
         Message::Text(text) => {
             let parsed: serde_json::Value = serde_json::from_str(&text).expect("json");
-            assert_eq!(parsed["type"], "bundle_completed");
-            assert_eq!(parsed["bundle_id"], "BUNDLE-WS-1");
-            assert_eq!(parsed["tx_hash"], "TX-WS-1");
+            assert_eq!(parsed["kind"], "verifier.bundle_completed");
+            assert_eq!(parsed["payload"]["bundleIds"][0], "BUNDLE-WS-1");
+            assert_eq!(parsed["payload"]["txId"], "TX-WS-1");
         }
         other => panic!("expected Text, got {other:?}"),
     }

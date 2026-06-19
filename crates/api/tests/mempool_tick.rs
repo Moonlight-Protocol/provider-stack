@@ -7,9 +7,10 @@ use chrono::Duration;
 use common::TestDb;
 use provider_stack_core::{
     config::{Config, MempoolConfig},
+    events::EventBroadcaster,
     pipelines::mempool::run_tick,
 };
-use provider_stack_persistence::{BundleStatus, OperationsBundleRepo};
+use provider_stack_persistence::{EntityRepo, OperationsBundleRepo};
 use serde_json::json;
 use sqlx::Row;
 use std::sync::Arc;
@@ -71,6 +72,8 @@ async fn tick_expires_past_ttl_and_promotes_up_to_capacity() {
     let Some(db) = skip_if_no_db().await else { return; };
 
     let repo = OperationsBundleRepo::new(db.pool.clone());
+    let entities = EntityRepo::new(db.pool.clone());
+    let events = EventBroadcaster::new(256, "GTESTPP".to_string());
 
     let now = chrono::Utc::now();
     // 2 expired, 5 pending in future, capacity = 3.
@@ -81,7 +84,7 @@ async fn tick_expires_past_ttl_and_promotes_up_to_capacity() {
     }
 
     let config = cfg_with_capacity(3);
-    run_tick(&repo, &config).await.expect("tick");
+    run_tick(&repo, &entities, &config, &events).await.expect("tick");
 
     // Two expired bundles now EXPIRED.
     let expired_count: i64 = sqlx::query_scalar(
@@ -117,6 +120,8 @@ async fn tick_expires_past_ttl_and_promotes_up_to_capacity() {
 async fn tick_promotes_oldest_first() {
     let Some(db) = skip_if_no_db().await else { return; };
     let repo = OperationsBundleRepo::new(db.pool.clone());
+    let entities = EntityRepo::new(db.pool.clone());
+    let events = EventBroadcaster::new(256, "GTESTPP".to_string());
     let now = chrono::Utc::now();
 
     // Insert three pending bundles, each with a slight created_at delay.
@@ -127,7 +132,7 @@ async fn tick_promotes_oldest_first() {
     insert_bundle(&repo, "third", now + Duration::hours(1)).await;
 
     let config = cfg_with_capacity(1);
-    run_tick(&repo, &config).await.expect("tick");
+    run_tick(&repo, &entities, &config, &events).await.expect("tick");
 
     let row = sqlx::query(
         r#"SELECT id FROM operations_bundles WHERE status = 'PROCESSING'::bundle_status"#,
@@ -145,6 +150,8 @@ async fn tick_promotes_oldest_first() {
 async fn tick_is_idempotent_when_full() {
     let Some(db) = skip_if_no_db().await else { return; };
     let repo = OperationsBundleRepo::new(db.pool.clone());
+    let entities = EntityRepo::new(db.pool.clone());
+    let events = EventBroadcaster::new(256, "GTESTPP".to_string());
     let now = chrono::Utc::now();
 
     for i in 0..3 {
@@ -153,7 +160,7 @@ async fn tick_is_idempotent_when_full() {
     let config = cfg_with_capacity(3);
 
     // First tick promotes all 3.
-    run_tick(&repo, &config).await.unwrap();
+    run_tick(&repo, &entities, &config, &events).await.unwrap();
 
     // Snapshot statuses.
     let snap_before: Vec<(String, String)> = sqlx::query_as(
@@ -164,7 +171,7 @@ async fn tick_is_idempotent_when_full() {
     .unwrap();
 
     // Second tick should be a no-op (slots full).
-    run_tick(&repo, &config).await.unwrap();
+    run_tick(&repo, &entities, &config, &events).await.unwrap();
 
     let snap_after: Vec<(String, String)> = sqlx::query_as(
         r#"SELECT id, status::text FROM operations_bundles ORDER BY id"#,

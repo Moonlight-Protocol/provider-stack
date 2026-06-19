@@ -9,6 +9,14 @@ authors.workspace = true
 name = "provider_stack_api"
 path = "src/lib.rs"
 
+[features]
+# Bakes the built SPA from frontend/public into the binary via include_dir.
+# On by default so `cargo build` / the Docker image embed the console. The CI
+# `clippy` and `test` jobs build with `--no-default-features` so they don't need
+# the frontend artifact present at compile time.
+default = ["embed-spa"]
+embed-spa = ["dep:include_dir"]
+
 [[bin]]
 name = "provider-stack"
 path = "src/main.rs"
@@ -50,7 +58,7 @@ opentelemetry.workspace = true
 opentelemetry_sdk.workspace = true
 opentelemetry-otlp.workspace = true
 
-include_dir.workspace = true
+include_dir = { workspace = true, optional = true }
 
 serde.workspace = true
 serde_json.workspace = true

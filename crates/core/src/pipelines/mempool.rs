@@ -11,7 +11,7 @@
 //! duration of one tick so overlapping intervals collapse harmlessly.
 
 use crate::config::Config;
-use crate::events::{summarize_bundle, EventBroadcaster, ProviderEvent};
+use crate::events::{summarize_bundle, EventBroadcaster, ProviderEvent, Submitter};
 use provider_stack_persistence::{
     BundleStatus, EntityRepo, OperationsBundleRepo, PgPool,
 };
@@ -84,8 +84,8 @@ pub async fn run_tick(
 
         let summary = match summarize_bundle(
             &b.operations_mlxdr,
-            config.mempool.cheap_op_weight as u32,
-            config.mempool.expensive_op_weight as u32,
+            config.mempool.cheap_op_weight,
+            config.mempool.expensive_op_weight,
         ) {
             Ok(s) => s,
             Err(e) => {
@@ -113,8 +113,10 @@ pub async fn run_tick(
             summary.weight,
             b.channel_contract_id.as_deref(),
             new_slot,
-            entity_name,
-            jurisdictions,
+            Submitter {
+                name: entity_name,
+                jurisdictions,
+            },
             summary.primary_amount,
         );
         events.send(ev);

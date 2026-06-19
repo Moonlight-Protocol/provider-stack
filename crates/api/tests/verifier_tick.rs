@@ -9,14 +9,16 @@ mod common;
 use chrono::{Duration, Utc};
 use common::TestDb;
 use provider_stack_core::{
-    events::{EventBroadcaster, ProviderEvent},
+    config::{Config, MempoolConfig},
+    events::EventBroadcaster,
     pipelines::verifier::run_tick,
 };
 use provider_stack_persistence::{
-    BundleStatus, BundleTransactionRepo, OperationsBundleRepo, TransactionRepo, TransactionStatus,
+    BundleStatus, BundleTransactionRepo, OperationsBundleRepo, TransactionRepo,
 };
 use serde_json::{json, Value};
 use soroban_client::{Options, Server};
+use std::sync::Arc;
 use std::time::Duration as StdDuration;
 use wiremock::matchers::{body_partial_json, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -27,6 +29,41 @@ async fn skip_if_no_db() -> Option<TestDb> {
         return None;
     }
     Some(TestDb::create().await)
+}
+
+/// Minimal config for the verifier tick — only the mempool op weights are read
+/// (to summarize completed bundles).
+fn cfg() -> Arc<Config> {
+    Arc::new(Config {
+        port: 0,
+        mode: "test".into(),
+        log_level: "warn".into(),
+        database_url: String::new(),
+        network: "standalone".into(),
+        network_fee: 1_000_000,
+        stellar_rpc_url: String::new(),
+        transaction_expiration_offset: 1_000,
+        event_watcher_interval: StdDuration::from_millis(30_000),
+        service_domain: "smoke.local".into(),
+        service_auth_secret: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".into(),
+        provider_base_url: "http://localhost:3010".into(),
+        operator_public_key: String::new(),
+        pp_secret_key: String::new(),
+        challenge_ttl: StdDuration::from_secs(900),
+        session_ttl: StdDuration::from_secs(21_600),
+        mempool: MempoolConfig {
+            slot_capacity: 10,
+            expensive_op_weight: 10,
+            cheap_op_weight: 1,
+            executor_interval: StdDuration::from_millis(2_000),
+            verifier_interval: StdDuration::from_millis(2_000),
+            ttl_check_interval: StdDuration::from_millis(5_000),
+            max_retry_attempts: 3,
+            startup_max_bundle_age: StdDuration::ZERO,
+        },
+        bundle_max_operations: 200,
+        allowed_origins: vec![],
+    })
 }
 
 /// Seed a bundle in PROCESSING with one linked UNVERIFIED transaction.
@@ -91,7 +128,8 @@ async fn success_marks_tx_verified_and_bundle_completed_and_broadcasts_event() {
 
     let server = Server::new(&rpc.uri(), Options { allow_http: true, ..Options::default() })
         .expect("Server::new");
-    run_tick(&server, &db.pool, &events).await.expect("verifier tick");
+    let config = cfg();
+    run_tick(&server, &db.pool, &events, &config).await.expect("verifier tick");
 
     // Transaction now VERIFIED.
     let tx_status: String = sqlx::query_scalar(
@@ -118,13 +156,9 @@ async fn success_marks_tx_verified_and_bundle_completed_and_broadcasts_event() {
         .await
         .expect("event timeout")
         .expect("recv");
-    match ev {
-        ProviderEvent::BundleCompleted { bundle_id, tx_hash } => {
-            assert_eq!(bundle_id, "BUNDLE-1");
-            assert_eq!(tx_hash, "TXHASH");
-        }
-        other => panic!("expected BundleCompleted, got {other:?}"),
-    }
+    assert_eq!(ev.kind, "verifier.bundle_completed");
+    assert_eq!(ev.payload["bundleIds"][0], "BUNDLE-1");
+    assert_eq!(ev.payload["txId"], "TXHASH");
 
     db.cleanup().await;
 }
@@ -148,7 +182,8 @@ async fn failed_marks_tx_failed_and_bundle_failed_and_broadcasts_event() {
 
     let server = Server::new(&rpc.uri(), Options { allow_http: true, ..Options::default() })
         .expect("Server::new");
-    run_tick(&server, &db.pool, &events).await.expect("verifier tick");
+    let config = cfg();
+    run_tick(&server, &db.pool, &events, &config).await.expect("verifier tick");
 
     let tx_status: String = sqlx::query_scalar(
         "SELECT status::text FROM transactions WHERE id = $1",
@@ -172,7 +207,7 @@ async fn failed_marks_tx_failed_and_bundle_failed_and_broadcasts_event() {
         .await
         .expect("event timeout")
         .expect("recv");
-    assert!(matches!(ev, ProviderEvent::BundleFailed { .. }));
+    assert_eq!(ev.kind, "verifier.bundle_failed");
 
     db.cleanup().await;
 }
@@ -193,7 +228,8 @@ async fn not_found_leaves_tx_unverified() {
     let events = EventBroadcaster::new(256, "GTESTPP".to_string());
     let server = Server::new(&rpc.uri(), Options { allow_http: true, ..Options::default() })
         .expect("Server::new");
-    run_tick(&server, &db.pool, &events).await.expect("verifier tick");
+    let config = cfg();
+    run_tick(&server, &db.pool, &events, &config).await.expect("verifier tick");
 
     let tx_status: String = sqlx::query_scalar(
         "SELECT status::text FROM transactions WHERE id = $1",

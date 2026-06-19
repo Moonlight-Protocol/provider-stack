@@ -682,34 +682,22 @@ impl MempoolMetricRepo {
         Self { pool }
     }
 
-    #[allow(clippy::too_many_arguments)]
-    pub async fn insert_snapshot(
-        &self,
-        platform_version: &str,
-        queue_depth: i32,
-        slot_count: i32,
-        bundles_completed: i32,
-        bundles_expired: i32,
-        bundles_failed: i32,
-        avg_processing_ms: Option<f64>,
-        p95_processing_ms: Option<f64>,
-        throughput_per_min: Option<f64>,
-    ) -> Result<()> {
+    pub async fn insert_snapshot(&self, snap: &MempoolMetricSnapshot<'_>) -> Result<()> {
         sqlx::query(
             r#"INSERT INTO mempool_metrics
                (platform_version, queue_depth, slot_count, bundles_completed, bundles_expired, bundles_failed,
                 avg_processing_ms, p95_processing_ms, throughput_per_min)
                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)"#,
         )
-        .bind(platform_version)
-        .bind(queue_depth)
-        .bind(slot_count)
-        .bind(bundles_completed)
-        .bind(bundles_expired)
-        .bind(bundles_failed)
-        .bind(avg_processing_ms)
-        .bind(p95_processing_ms)
-        .bind(throughput_per_min)
+        .bind(snap.platform_version)
+        .bind(snap.queue_depth)
+        .bind(snap.slot_count)
+        .bind(snap.bundles_completed)
+        .bind(snap.bundles_expired)
+        .bind(snap.bundles_failed)
+        .bind(snap.avg_processing_ms)
+        .bind(snap.p95_processing_ms)
+        .bind(snap.throughput_per_min)
         .execute(&self.pool)
         .await?;
         Ok(())

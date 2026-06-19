@@ -119,7 +119,7 @@ pub fn decode(mlxdr_b64: &str) -> Result<DecodedOperation, MlxdrError> {
             (utxo, amount)
         }
         OperationKind::Spend => {
-            if payload.len() < 1 {
+            if payload.is_empty() {
                 return Err(MlxdrError::BadShape("Spend payload must have ≥1 field"));
             }
             let utxo = scbytes(&payload[0])
@@ -369,7 +369,7 @@ pub fn build_fee_create_op(utxo_pubkey: &[u8; 65], fee: i128) -> Result<ScVal, M
         .try_into()
         .map_err(|e: soroban_client::xdr::Error| MlxdrError::Xdr(format!("BytesM utxo: {e}")))?;
     let amount = Int128Parts {
-        hi: ((fee as i128) >> 64) as i64,
+        hi: (fee >> 64) as i64,
         lo: ((fee as u128) & 0xFFFF_FFFF_FFFF_FFFF) as u64,
     };
     let tuple = vec![ScVal::Bytes(ScBytes(utxo_bytes)), ScVal::I128(amount)];
@@ -561,7 +561,7 @@ mod tests {
 
     fn i128_to_parts(v: i128) -> Int128Parts {
         Int128Parts {
-            hi: ((v as i128) >> 64) as i64,
+            hi: (v >> 64) as i64,
             lo: ((v as u128) & 0xFFFF_FFFF_FFFF_FFFF) as u64,
         }
     }

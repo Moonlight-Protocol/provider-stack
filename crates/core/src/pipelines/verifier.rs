@@ -1,9 +1,8 @@
 //! Verifier pipeline.
 //!
 //! For every UNVERIFIED `transactions` row, poll Soroban RPC `getTransaction` by hash:
-//!  - `SUCCESS`  → mark VERIFIED, broadcast `BundleCompleted` for each linked bundle, mark
-//!                 each bundle COMPLETED.
-//!  - `FAILED`   → mark FAILED, broadcast `BundleFailed`, mark each linked bundle FAILED.
+//!  - `SUCCESS` → mark VERIFIED, broadcast `BundleCompleted` per linked bundle, mark each COMPLETED.
+//!  - `FAILED` → mark FAILED, broadcast `BundleFailed`, mark each linked bundle FAILED.
 //!  - `NOT_FOUND` → leave UNVERIFIED, retry next tick.
 //!
 //! The loop is gated by a `Mutex<bool>` so overlapping ticks collapse safely.
@@ -23,8 +22,8 @@ use tracing::{debug, instrument, warn, Instrument};
 
 #[instrument(skip_all, name = "pipeline.verifier")]
 pub async fn run(config: Arc<Config>, pool: PgPool, events: EventBroadcaster) {
-    let cheap = config.mempool.cheap_op_weight as u32;
-    let expensive = config.mempool.expensive_op_weight as u32;
+    let cheap = config.mempool.cheap_op_weight;
+    let expensive = config.mempool.expensive_op_weight;
     let _ = (cheap, expensive);
     let server = match Server::new(
         &config.stellar_rpc_url,
@@ -75,8 +74,8 @@ pub async fn run_tick(
     let bundle_link = BundleTransactionRepo::new(pool.clone());
     let bundle_repo = OperationsBundleRepo::new(pool.clone());
 
-    let cheap = config.mempool.cheap_op_weight as u32;
-    let expensive = config.mempool.expensive_op_weight as u32;
+    let cheap = config.mempool.cheap_op_weight;
+    let expensive = config.mempool.expensive_op_weight;
 
     let unverified = tx_repo.list_unverified(64).await?;
     for tx in unverified {
@@ -164,6 +163,19 @@ pub async fn run_tick(
                         .mark_failed(bid, "tx failed on chain", None)
                         .await?;
                 }
+                let channel_id = match bundle_ids.first() {
+                    Some(bid) => bundle_repo
+                        .find_by_id(bid)
+                        .await?
+                        .and_then(|b| b.channel_contract_id),
+                    None => None,
+                };
+                events.send(ProviderEvent::verifier_bundle_failed(
+                    events.current_scope(),
+                    &tx.id,
+                    &bundle_ids,
+                    channel_id.as_deref(),
+                ));
             }
             RpcStatus::NotFound => {
                 // Tx not yet observed on chain — retry next tick.

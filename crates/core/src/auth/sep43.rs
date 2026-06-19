@@ -66,11 +66,12 @@ impl NonceStore {
     pub fn consume(&self, nonce: &str, expected_public_key: &str) -> bool {
         let mut guard = self.inner.lock().unwrap();
         self.gc(&mut guard);
-        match guard.remove(nonce) {
-            Some(entry) if entry.public_key == expected_public_key
-                && entry.created_at.elapsed() < self.ttl => true,
-            _ => false,
-        }
+        matches!(
+            guard.remove(nonce),
+            Some(entry)
+                if entry.public_key == expected_public_key
+                    && entry.created_at.elapsed() < self.ttl
+        )
     }
 
     fn gc(&self, guard: &mut std::sync::MutexGuard<HashMap<String, NonceEntry>>) {

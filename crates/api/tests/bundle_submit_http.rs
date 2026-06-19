@@ -4,6 +4,7 @@
 //!   - decodes the MLXDR ops + computes the fee per the provider-platform formula,
 //!   - inserts a PENDING operations_bundles row,
 //!   - returns 201 with bundle_id + status.
+//!
 //! 0-op submissions → 400; missing JWT → 401; non-MLXDR strings → 400.
 
 mod common;
@@ -54,7 +55,7 @@ fn entity_jwt(state: &provider_stack_api::state::AppState) -> String {
 
 fn i128_parts(v: i128) -> Int128Parts {
     Int128Parts {
-        hi: ((v as i128) >> 64) as i64,
+        hi: (v >> 64) as i64,
         lo: ((v as u128) & 0xFFFF_FFFF_FFFF_FFFF) as u64,
     }
 }

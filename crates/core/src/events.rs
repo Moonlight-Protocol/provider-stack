@@ -30,6 +30,13 @@ pub struct ProviderEvent {
     pub payload: JsonValue,
 }
 
+/// The submitting entity's display identity, carried on `mempool.bundle_added`.
+/// Grouped so the event constructor stays within the arg-count budget.
+pub struct Submitter {
+    pub name: Option<String>,
+    pub jurisdictions: Vec<String>,
+}
+
 impl ProviderEvent {
     fn new(kind: &str, scope: EventScope, payload: JsonValue) -> Self {
         Self {
@@ -46,8 +53,7 @@ impl ProviderEvent {
         weight: u32,
         channel_contract_id: Option<&str>,
         new_slot: bool,
-        entity_name: Option<String>,
-        jurisdictions: Vec<String>,
+        submitter: Submitter,
         amount: Option<String>,
     ) -> Self {
         Self::new(
@@ -58,8 +64,8 @@ impl ProviderEvent {
                 "weight": weight,
                 "channelContractId": channel_contract_id,
                 "newSlot": new_slot,
-                "entityName": entity_name,
-                "jurisdictions": jurisdictions,
+                "entityName": submitter.name,
+                "jurisdictions": submitter.jurisdictions,
                 "amount": amount,
             }),
         )
@@ -90,6 +96,23 @@ impl ProviderEvent {
     ) -> Self {
         Self::new(
             "verifier.bundle_completed",
+            scope,
+            json!({
+                "txId": tx_id,
+                "bundleIds": bundle_ids,
+                "channelContractId": channel_contract_id,
+            }),
+        )
+    }
+
+    pub fn verifier_bundle_failed(
+        scope: EventScope,
+        tx_id: &str,
+        bundle_ids: &[String],
+        channel_contract_id: Option<&str>,
+    ) -> Self {
+        Self::new(
+            "verifier.bundle_failed",
             scope,
             json!({
                 "txId": tx_id,

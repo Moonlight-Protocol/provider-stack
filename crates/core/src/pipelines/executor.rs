@@ -90,12 +90,23 @@ pub async fn run_tick(
         .list_by_status(BundleStatus::Processing, config.mempool.slot_capacity as i64)
         .await?;
 
+    let ctx = SubmitCtx {
+        server,
+        kp: &kp,
+        pubkey: &pubkey,
+        passphrase,
+        txs: &txs,
+        link: &link,
+        config,
+        events,
+    };
+
     for bundle in processing {
         let existing = link.list_transactions_for_bundle(&bundle.id).await?;
         if !existing.is_empty() {
             continue;
         }
-        if let Err(e) = submit_one(server, &kp, &pubkey, passphrase, &bundle, &txs, &link, config, events).await {
+        if let Err(e) = submit_one(&ctx, &bundle).await {
             warn!(bundle = %bundle.id, error = %e, "executor: bundle submission failed");
             bundles
                 .mark_failed(&bundle.id, &format!("submission failed: {e}"), None)
@@ -105,17 +116,33 @@ pub async fn run_tick(
     Ok(())
 }
 
+/// The ambient dependencies a single `submit_one` call needs, grouped so the
+/// function takes the per-bundle item plus one context rather than 9 args.
+struct SubmitCtx<'a> {
+    server: &'a Server,
+    kp: &'a Keypair,
+    pubkey: &'a str,
+    passphrase: &'a str,
+    txs: &'a TransactionRepo,
+    link: &'a BundleTransactionRepo,
+    config: &'a Config,
+    events: &'a EventBroadcaster,
+}
+
 async fn submit_one(
-    server: &Server,
-    kp: &Keypair,
-    pubkey: &str,
-    passphrase: &str,
+    ctx: &SubmitCtx<'_>,
     bundle: &provider_stack_persistence::OperationsBundle,
-    txs: &TransactionRepo,
-    link: &BundleTransactionRepo,
-    config: &Config,
-    events: &EventBroadcaster,
 ) -> anyhow::Result<()> {
+    let &SubmitCtx {
+        server,
+        kp,
+        pubkey,
+        passphrase,
+        txs,
+        link,
+        config,
+        events,
+    } = ctx;
     let contract_id = bundle
         .channel_contract_id
         .as_deref()
@@ -233,7 +260,7 @@ async fn submit_one(
         &user_spends,
     )?;
 
-    assembled.sign(&[kp.clone()]);
+    assembled.sign(std::slice::from_ref(kp));
 
     let response = server
         .send_transaction(assembled)

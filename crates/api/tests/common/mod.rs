@@ -4,6 +4,10 @@
 //! Requires `DATABASE_URL` pointing at a reachable Postgres with CREATEDB. If unset, callers
 //! should `eprintln + skip` — this module is meant for local + CI use, not unit isolation.
 
+// Shared across many test binaries, each of which uses only a subset of these
+// helpers — so some are legitimately unused per-binary.
+#![allow(dead_code)]
+
 use ed25519_dalek::SigningKey;
 use provider_stack_api::state::AppState;
 use provider_stack_core::{

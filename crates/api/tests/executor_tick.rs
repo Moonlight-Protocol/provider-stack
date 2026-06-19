@@ -15,6 +15,7 @@ use common::TestDb;
 use ed25519_dalek::SigningKey;
 use provider_stack_core::{
     config::{Config, MempoolConfig},
+    events::EventBroadcaster,
     pipelines::executor::run_tick,
 };
 use provider_stack_persistence::{BundleStatus, OperationsBundleRepo};
@@ -47,14 +48,6 @@ fn pp_keypair_seed() -> [u8; 32] {
 
 fn pp_strkey_secret() -> String {
     format!("{}", stellar_strkey::ed25519::PrivateKey(pp_keypair_seed()))
-}
-
-fn pp_strkey_public() -> String {
-    let signing = SigningKey::from_bytes(&pp_keypair_seed());
-    format!(
-        "{}",
-        stellar_strkey::ed25519::PublicKey(signing.verifying_key().to_bytes())
-    )
 }
 
 /// Build a base64 LedgerEntryData::Account XDR for the PP account with a fixed seq num.
@@ -187,7 +180,8 @@ async fn processing_bundle_submitted_and_tx_row_recorded() {
     let config = cfg(&rpc.uri());
     let server =
         Server::new(&rpc.uri(), Options { allow_http: true, ..Options::default() }).unwrap();
-    run_tick(&server, &db.pool, &config).await.expect("executor tick");
+    let events = EventBroadcaster::new(256, "GTESTPP".to_string());
+    run_tick(&server, &db.pool, &config, &events).await.expect("executor tick");
 
     // transactions row inserted with the RPC-returned hash.
     let row = sqlx::query("SELECT id, status::text FROM transactions WHERE id = $1")
@@ -221,7 +215,8 @@ async fn executor_skips_when_no_processing_bundles() {
     let config = cfg(&rpc.uri());
     let server =
         Server::new(&rpc.uri(), Options { allow_http: true, ..Options::default() }).unwrap();
-    run_tick(&server, &db.pool, &config).await.expect("executor tick on empty");
+    let events = EventBroadcaster::new(256, "GTESTPP".to_string());
+    run_tick(&server, &db.pool, &config, &events).await.expect("executor tick on empty");
 
     let tx_count: i64 = sqlx::query_scalar("SELECT count(*) FROM transactions")
         .fetch_one(&db.pool)

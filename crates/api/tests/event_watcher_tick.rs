@@ -5,6 +5,7 @@
 //!  - On a `provider_added` event: membership transitions to ACTIVE.
 //!  - On a `provider_removed` event: membership transitions to REJECTED.
 //!  - On no events: membership stays as-is.
+//!
 //! The cursor is in-memory only (no durable store): a fresh map seeds the first
 //! poll from the RPC's oldest available ledger.
 
