@@ -241,10 +241,3 @@ pub struct MempoolMetric {
     pub p95_processing_ms: Option<f64>,
     pub throughput_per_min: Option<f64>,
 }
-
-#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
-pub struct EventWatcherState {
-    pub key: String,
-    pub value: String,
-    pub updated_at: DateTime<Utc>,
-}

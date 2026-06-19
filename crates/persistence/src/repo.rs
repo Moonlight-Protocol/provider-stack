@@ -682,6 +682,7 @@ impl MempoolMetricRepo {
         Self { pool }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn insert_snapshot(
         &self,
         platform_version: &str,
@@ -745,41 +746,6 @@ impl MempoolMetricRepo {
         .fetch_all(&self.pool)
         .await?;
         Ok(rows)
-    }
-}
-
-// ---- event_watcher_state ----
-
-pub struct EventWatcherStateRepo {
-    pool: PgPool,
-}
-
-impl EventWatcherStateRepo {
-    pub fn new(pool: PgPool) -> Self {
-        Self { pool }
-    }
-
-    pub async fn get(&self, key: &str) -> Result<Option<String>> {
-        let row: Option<(String,)> = sqlx::query_as(
-            r#"SELECT value FROM event_watcher_state WHERE key = $1"#,
-        )
-        .bind(key)
-        .fetch_optional(&self.pool)
-        .await?;
-        Ok(row.map(|(v,)| v))
-    }
-
-    pub async fn set(&self, key: &str, value: &str) -> Result<()> {
-        sqlx::query(
-            r#"INSERT INTO event_watcher_state (key, value)
-               VALUES ($1, $2)
-               ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()"#,
-        )
-        .bind(key)
-        .bind(value)
-        .execute(&self.pool)
-        .await?;
-        Ok(())
     }
 }
 

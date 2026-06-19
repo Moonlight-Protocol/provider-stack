@@ -4,16 +4,22 @@
 //! channel-auth contract. On a `provider_added` event whose payload references this stack's
 //! PP, promote the membership status to `ACTIVE`. On `provider_removed` mark it `REJECTED`.
 //!
-//! The cursor (last-seen-ledger) is per-channel-auth-id in `event_watcher_state`.
+//! The cursor (last-seen soroban paging token) is held **in memory only**, per
+//! channel-auth-id, for the lifetime of the process — there is no durable cursor
+//! store. On a fresh start (or after a process restart) the watcher syncs all
+//! available history from the oldest ledger the RPC still retains and converges
+//! channel state by querying the council, so a Postgres wipe fully resets the
+//! instance with no surviving state.
 
 use crate::config::Config;
 use crate::events::{EventBroadcaster, ProviderEvent};
 use provider_stack_persistence::{
-    ChannelStateRepo, CouncilMembershipRepo, CouncilMembershipStatus, EventWatcherStateRepo, PgPool,
+    ChannelStateRepo, CouncilMembershipRepo, CouncilMembershipStatus, PgPool,
 };
 use soroban_client::soroban_rpc::{EventResponse, EventType};
 use soroban_client::xdr::{ScSymbol, ScVal};
 use soroban_client::{EventFilter, Options, Pagination, Server, Topic};
+use std::collections::HashMap;
 use std::sync::Arc;
 use stellar_strkey::Contract;
 use tokio::sync::Mutex;
@@ -50,6 +56,11 @@ pub async fn run(config: Arc<Config>, pool: PgPool, events: EventBroadcaster) {
     tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
     let processing = Arc::new(Mutex::new(false));
 
+    // In-memory cursor per channel-auth-id, advanced across ticks for the life of
+    // the process. Lost on restart by design — a fresh process re-syncs from the
+    // oldest available ledger and re-converges from the council.
+    let mut cursors: HashMap<String, String> = HashMap::new();
+
     loop {
         tick.tick().await;
         let mut guard = processing.lock().await;
@@ -59,7 +70,7 @@ pub async fn run(config: Arc<Config>, pool: PgPool, events: EventBroadcaster) {
         *guard = true;
         drop(guard);
 
-        if let Err(e) = run_tick(&server, &pool, &events).await {
+        if let Err(e) = run_tick(&server, &pool, &events, &mut cursors).await {
             warn!(error = %e, "event_watcher tick failed");
         }
         debug!("event_watcher tick complete");
@@ -70,27 +81,30 @@ pub async fn run(config: Arc<Config>, pool: PgPool, events: EventBroadcaster) {
 }
 
 /// One watcher tick. Exposed for the integration test.
+///
+/// `cursors` is the in-memory per-channel-auth-id paging cursor, owned by the
+/// caller and carried across ticks for the life of the process. It is never
+/// persisted: an absent entry means "sync from the oldest available ledger".
 pub async fn run_tick(
     server: &Server,
     pool: &PgPool,
     events: &EventBroadcaster,
+    cursors: &mut HashMap<String, String>,
 ) -> anyhow::Result<()> {
     let memberships_repo = CouncilMembershipRepo::new(pool.clone());
     let channel_state_repo = ChannelStateRepo::new(pool.clone());
-    let cursor_repo = EventWatcherStateRepo::new(pool.clone());
     let memberships = memberships_repo.list_active().await?;
 
     for m in memberships {
-        let cursor_key = format!("channel_auth:{}", m.channel_auth_id);
-        let last_cursor = cursor_repo.get(&cursor_key).await?;
-        let pagination = match last_cursor.as_deref() {
-            Some(c) => Pagination::Cursor(c.to_string()),
+        let pagination = match cursors.get(&m.channel_auth_id) {
+            Some(c) => Pagination::Cursor(c.clone()),
             None => {
-                // No cursor yet — seed from the network's current ledger, with a
-                // safety lookback so we don't miss events emitted between when the
-                // membership row was inserted and the watcher's first tick on it.
-                let latest = server.get_latest_ledger().await?;
-                Pagination::From(latest.sequence.saturating_sub(1000).max(1))
+                // No in-memory cursor (fresh process / first tick for this
+                // council) — sync ALL available history from the oldest ledger
+                // the RPC still retains, so nothing emitted while we were down is
+                // skipped. Convergence-by-query is the can't-miss baseline.
+                let oldest = server.get_health().await?.oldest_ledger;
+                Pagination::From(oldest.max(1))
             }
         };
         // Topic filter matches any-kind events with 1+ topics. The contract
@@ -112,7 +126,7 @@ pub async fn run_tick(
         // alone for the next tick.
         if let Err(e) = &result {
             if let Some(min_ledger) = parse_min_ledger_from_error(&format!("{e:?}")) {
-                cursor_repo.set(&cursor_key, "").await.ok();
+                cursors.remove(&m.channel_auth_id);
                 // UC6: out-of-retention means we can no longer event-replay any
                 // disable that landed in the gap. Re-converge from the council's
                 // current truth before resuming the live stream.
@@ -143,7 +157,7 @@ pub async fn run_tick(
             .await?;
         }
         if let Some(new_cursor) = response.cursor {
-            cursor_repo.set(&cursor_key, &new_cursor).await?;
+            cursors.insert(m.channel_auth_id.clone(), new_cursor);
         }
     }
     Ok(())
