@@ -553,7 +553,7 @@ fn sign_soroban_auth_entries(
                 // orderedSpendSigners at signatures-xdr.ts:22).
                 let mut sorted_spends: Vec<&mlxdr::UserSpendSignature> =
                     user_spends.iter().collect();
-                sorted_spends.sort_by(|a, b| a.utxo_pk65.cmp(&b.utxo_pk65));
+                sorted_spends.sort_by_key(|s| s.utxo_pk65);
 
                 let mut map_entries: Vec<ScMapEntry> = Vec::new();
                 for spend in &sorted_spends {
