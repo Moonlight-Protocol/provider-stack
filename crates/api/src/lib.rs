@@ -46,7 +46,10 @@ pub async fn run_server() -> Result<()> {
 
     let allowed_origins = config.allowed_origins.clone();
     HttpServer::new(move || {
-        let mut cors = Cors::default().allow_any_method().allow_any_header().max_age(3600);
+        let mut cors = Cors::default()
+            .allow_any_method()
+            .allow_any_header()
+            .max_age(3600);
         for origin in &allowed_origins {
             cors = cors.allowed_origin(origin);
         }
@@ -83,8 +86,8 @@ pub fn init_tracing() {
     // OTEL_SERVICE_NAME (the verify-otel-local.ts script filters by serviceName).
     let otlp_endpoint = std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT")
         .unwrap_or_else(|_| "http://localhost:4318".into());
-    let service_name = std::env::var("OTEL_SERVICE_NAME")
-        .unwrap_or_else(|_| "provider-platform".into());
+    let service_name =
+        std::env::var("OTEL_SERVICE_NAME").unwrap_or_else(|_| "provider-platform".into());
     let otel_layer = match opentelemetry_otlp::SpanExporter::builder()
         .with_http()
         .with_endpoint(format!("{otlp_endpoint}/v1/traces"))
@@ -116,7 +119,9 @@ pub fn init_tracing() {
         }
     };
 
-    let registry = tracing_subscriber::registry().with(env_filter).with(fmt::layer().json());
+    let registry = tracing_subscriber::registry()
+        .with(env_filter)
+        .with(fmt::layer().json());
     let _ = if let Some(layer) = otel_layer {
         registry.with(layer).try_init()
     } else {

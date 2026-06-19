@@ -42,7 +42,9 @@ fn sign_nonce(key: &SigningKey, nonce_b64: &str) -> String {
 
 #[actix_web::test]
 async fn full_kyc_register_roundtrip_auto_approves() {
-    let Some(db) = skip_if_no_db().await else { return; };
+    let Some(db) = skip_if_no_db().await else {
+        return;
+    };
 
     let pp_seed = [0xABu8; 32];
     let operator_strkey = pp_strkey([0xCCu8; 32]);
@@ -66,7 +68,10 @@ async fn full_kyc_register_roundtrip_auto_approves() {
         .set_json(serde_json::json!({ "pubkey": entity_strkey }))
         .to_request();
     let body: serde_json::Value = test::call_and_read_body_json(&app, req).await;
-    let nonce = body["data"]["nonce"].as_str().expect("data.nonce").to_string();
+    let nonce = body["data"]["nonce"]
+        .as_str()
+        .expect("data.nonce")
+        .to_string();
 
     // 2. Register with the signed nonce.
     let signature = sign_nonce(&entity_key, &nonce);
@@ -80,7 +85,12 @@ async fn full_kyc_register_roundtrip_auto_approves() {
         }))
         .to_request();
     let resp = test::call_service(&app, req).await;
-    assert_eq!(resp.status().as_u16(), 201, "expected 201 Created, got {}", resp.status());
+    assert_eq!(
+        resp.status().as_u16(),
+        201,
+        "expected 201 Created, got {}",
+        resp.status()
+    );
     let body: serde_json::Value = test::read_body_json(resp).await;
     assert_eq!(body["data"]["status"], "APPROVED");
     assert_eq!(body["data"]["entityId"], entity_strkey);
@@ -103,15 +113,17 @@ async fn full_kyc_register_roundtrip_auto_approves() {
     .fetch_one(&db.pool)
     .await
     .expect("count accounts");
-    assert_eq!(account_count, 1, "exactly one USER account should be provisioned");
+    assert_eq!(
+        account_count, 1,
+        "exactly one USER account should be provisioned"
+    );
 
-    let wallet_count: i64 = sqlx::query_scalar(
-        r#"SELECT count(*) FROM wallet_users WHERE public_key = $1"#,
-    )
-    .bind(&entity_strkey)
-    .fetch_one(&db.pool)
-    .await
-    .expect("count wallet_users");
+    let wallet_count: i64 =
+        sqlx::query_scalar(r#"SELECT count(*) FROM wallet_users WHERE public_key = $1"#)
+            .bind(&entity_strkey)
+            .fetch_one(&db.pool)
+            .await
+            .expect("count wallet_users");
     assert_eq!(wallet_count, 1, "wallet_user row should be present");
 
     db.cleanup().await;
@@ -119,7 +131,9 @@ async fn full_kyc_register_roundtrip_auto_approves() {
 
 #[actix_web::test]
 async fn register_rejects_unknown_pp_with_404() {
-    let Some(db) = skip_if_no_db().await else { return; };
+    let Some(db) = skip_if_no_db().await else {
+        return;
+    };
 
     let pp_seed = [0xABu8; 32];
     let operator_strkey = pp_strkey([0xCCu8; 32]);
@@ -132,23 +146,36 @@ async fn register_rejects_unknown_pp_with_404() {
     )
     .await;
 
-    let entity_strkey = strkey(SigningKey::from_bytes(&[0xEEu8; 32]).verifying_key().to_bytes());
+    let entity_strkey = strkey(
+        SigningKey::from_bytes(&[0xEEu8; 32])
+            .verifying_key()
+            .to_bytes(),
+    );
     // Use a different (random) "PP" in the URL.
     let unknown_pp = pp_strkey([0xDEu8; 32]);
 
     let req = test::TestRequest::post()
-        .uri(&format!("/api/v1/providers/{unknown_pp}/entities/challenge"))
+        .uri(&format!(
+            "/api/v1/providers/{unknown_pp}/entities/challenge"
+        ))
         .set_json(serde_json::json!({ "pubkey": entity_strkey }))
         .to_request();
     let resp = test::call_service(&app, req).await;
-    assert_eq!(resp.status().as_u16(), 404, "unknown PP must 404; got {}", resp.status());
+    assert_eq!(
+        resp.status().as_u16(),
+        404,
+        "unknown PP must 404; got {}",
+        resp.status()
+    );
 
     db.cleanup().await;
 }
 
 #[actix_web::test]
 async fn register_rejects_bad_signature_with_401() {
-    let Some(db) = skip_if_no_db().await else { return; };
+    let Some(db) = skip_if_no_db().await else {
+        return;
+    };
 
     let pp_seed = [0xABu8; 32];
     let operator_strkey = pp_strkey([0xCCu8; 32]);
@@ -184,7 +211,12 @@ async fn register_rejects_bad_signature_with_401() {
         }))
         .to_request();
     let resp = test::call_service(&app, req).await;
-    assert_eq!(resp.status().as_u16(), 401, "bad signature must 401; got {}", resp.status());
+    assert_eq!(
+        resp.status().as_u16(),
+        401,
+        "bad signature must 401; got {}",
+        resp.status()
+    );
 
     db.cleanup().await;
 }

@@ -28,23 +28,21 @@ pub async fn fetch_utxo_balances(
         return Ok(Vec::new());
     }
 
-    let contract = Contracts::new(channel_contract_id)
-        .map_err(|e| anyhow!("Contracts::new: {e:?}"))?;
+    let contract =
+        Contracts::new(channel_contract_id).map_err(|e| anyhow!("Contracts::new: {e:?}"))?;
 
     // Simulate-only: we need any source account that exists on chain (or a dummy with
     // sequence 0; simulate doesn't validate the account). Use a fresh PP-shaped Account.
-    let mut account = Account::new(pp_pubkey, "0")
-        .map_err(|e| anyhow!("Account::new: {e:?}"))?;
+    let mut account = Account::new(pp_pubkey, "0").map_err(|e| anyhow!("Account::new: {e:?}"))?;
 
     let utxos_scval = ScVal::Vec(Some(soroban_client::xdr::ScVec(
         soroban_client::xdr::VecM::try_from(
             utxos
                 .into_iter()
                 .map(|u| -> Result<ScVal> {
-                    Ok(ScVal::Bytes(ScBytes(
-                        u.try_into()
-                            .map_err(|e: soroban_client::xdr::Error| anyhow!("BytesM: {e}"))?,
-                    )))
+                    Ok(ScVal::Bytes(ScBytes(u.try_into().map_err(
+                        |e: soroban_client::xdr::Error| anyhow!("BytesM: {e}"),
+                    )?)))
                 })
                 .collect::<Result<Vec<_>>>()?,
         )

@@ -88,9 +88,9 @@ fn deposit_mlxdr(amount: i128) -> String {
     let payload = ScVal::Vec(Some(ScVec(
         VecM::try_from(vec![
             ScVal::Address(ScAddress::Account(soroban_client::xdr::AccountId(
-                soroban_client::xdr::PublicKey::PublicKeyTypeEd25519(
-                    soroban_client::xdr::Uint256([0xABu8; 32]),
-                ),
+                soroban_client::xdr::PublicKey::PublicKeyTypeEd25519(soroban_client::xdr::Uint256(
+                    [0xABu8; 32],
+                )),
             ))),
             ScVal::I128(i128_parts(amount)),
             ScVal::Vec(Some(ScVec(VecM::try_from(Vec::<ScVal>::new()).unwrap()))),
@@ -102,12 +102,13 @@ fn deposit_mlxdr(amount: i128) -> String {
 
 #[actix_web::test]
 async fn bundle_with_deposit_plus_create_computes_correct_fee() {
-    let Some(db) = skip_if_no_db().await else { return; };
+    let Some(db) = skip_if_no_db().await else {
+        return;
+    };
 
     let pp_seed = [0xABu8; 32];
     let operator_strkey = pp_strkey([0xCCu8; 32]);
-    let state =
-        build_test_app_state(pp_seed, operator_strkey, db.pool.clone(), SERVICE_DOMAIN);
+    let state = build_test_app_state(pp_seed, operator_strkey, db.pool.clone(), SERVICE_DOMAIN);
     let pp_pk = pp_strkey(pp_seed);
     let token = entity_jwt(&state);
 
@@ -131,7 +132,12 @@ async fn bundle_with_deposit_plus_create_computes_correct_fee() {
         .set_json(json!({ "operationsMLXDR": ops }))
         .to_request();
     let resp = test::call_service(&app, req).await;
-    assert_eq!(resp.status().as_u16(), 201, "expected 201, got {}", resp.status());
+    assert_eq!(
+        resp.status().as_u16(),
+        201,
+        "expected 201, got {}",
+        resp.status()
+    );
 
     let res_body: Value = test::read_body_json(resp).await;
     let bundle_id = res_body["data"]["operationsBundleId"]
@@ -148,20 +154,28 @@ async fn bundle_with_deposit_plus_create_computes_correct_fee() {
     .await
     .expect("bundle row");
     assert_eq!(row.get::<String, _>("status"), "PENDING");
-    assert_eq!(row.get::<i64, _>("fee"), 500, "fee should be 1000 - 500 = 500");
-    assert_eq!(row.get::<Option<String>, _>("created_by"), Some(entity_strkey()));
+    assert_eq!(
+        row.get::<i64, _>("fee"),
+        500,
+        "fee should be 1000 - 500 = 500"
+    );
+    assert_eq!(
+        row.get::<Option<String>, _>("created_by"),
+        Some(entity_strkey())
+    );
 
     db.cleanup().await;
 }
 
 #[actix_web::test]
 async fn empty_operations_returns_400() {
-    let Some(db) = skip_if_no_db().await else { return; };
+    let Some(db) = skip_if_no_db().await else {
+        return;
+    };
 
     let pp_seed = [0xABu8; 32];
     let operator_strkey = pp_strkey([0xCCu8; 32]);
-    let state =
-        build_test_app_state(pp_seed, operator_strkey, db.pool.clone(), SERVICE_DOMAIN);
+    let state = build_test_app_state(pp_seed, operator_strkey, db.pool.clone(), SERVICE_DOMAIN);
     let pp_pk = pp_strkey(pp_seed);
     let token = entity_jwt(&state);
 
@@ -178,19 +192,25 @@ async fn empty_operations_returns_400() {
         .set_json(json!({ "operationsMLXDR": [] }))
         .to_request();
     let resp = test::call_service(&app, req).await;
-    assert_eq!(resp.status().as_u16(), 400, "expected 400, got {}", resp.status());
+    assert_eq!(
+        resp.status().as_u16(),
+        400,
+        "expected 400, got {}",
+        resp.status()
+    );
 
     db.cleanup().await;
 }
 
 #[actix_web::test]
 async fn missing_jwt_returns_401() {
-    let Some(db) = skip_if_no_db().await else { return; };
+    let Some(db) = skip_if_no_db().await else {
+        return;
+    };
 
     let pp_seed = [0xABu8; 32];
     let operator_strkey = pp_strkey([0xCCu8; 32]);
-    let state =
-        build_test_app_state(pp_seed, operator_strkey, db.pool.clone(), SERVICE_DOMAIN);
+    let state = build_test_app_state(pp_seed, operator_strkey, db.pool.clone(), SERVICE_DOMAIN);
     let pp_pk = pp_strkey(pp_seed);
 
     let app = test::init_service(
@@ -205,19 +225,25 @@ async fn missing_jwt_returns_401() {
         .set_json(json!({ "operationsMLXDR": [deposit_mlxdr(100)] }))
         .to_request();
     let resp = test::call_service(&app, req).await;
-    assert_eq!(resp.status().as_u16(), 401, "expected 401, got {}", resp.status());
+    assert_eq!(
+        resp.status().as_u16(),
+        401,
+        "expected 401, got {}",
+        resp.status()
+    );
 
     db.cleanup().await;
 }
 
 #[actix_web::test]
 async fn non_mlxdr_string_returns_400() {
-    let Some(db) = skip_if_no_db().await else { return; };
+    let Some(db) = skip_if_no_db().await else {
+        return;
+    };
 
     let pp_seed = [0xABu8; 32];
     let operator_strkey = pp_strkey([0xCCu8; 32]);
-    let state =
-        build_test_app_state(pp_seed, operator_strkey, db.pool.clone(), SERVICE_DOMAIN);
+    let state = build_test_app_state(pp_seed, operator_strkey, db.pool.clone(), SERVICE_DOMAIN);
     let pp_pk = pp_strkey(pp_seed);
     let token = entity_jwt(&state);
 
@@ -234,7 +260,12 @@ async fn non_mlxdr_string_returns_400() {
         .set_json(json!({ "operationsMLXDR": ["not-real-mlxdr"] }))
         .to_request();
     let resp = test::call_service(&app, req).await;
-    assert_eq!(resp.status().as_u16(), 400, "expected 400 for non-MLXDR input; got {}", resp.status());
+    assert_eq!(
+        resp.status().as_u16(),
+        400,
+        "expected 400 for non-MLXDR input; got {}",
+        resp.status()
+    );
 
     db.cleanup().await;
 }

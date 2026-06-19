@@ -21,8 +21,8 @@ use sha2::{Digest, Sha256};
 use stellar_xdr::{
     BytesM, DataValue, DecoratedSignature, Limits, ManageDataOp, Memo, MuxedAccount, Operation,
     OperationBody, Preconditions, ReadXdr, SequenceNumber, Signature, SignatureHint, String64,
-    TimeBounds, TimePoint, Transaction, TransactionEnvelope, TransactionExt,
-    TransactionV1Envelope, Uint256, VecM, WriteXdr,
+    TimeBounds, TimePoint, Transaction, TransactionEnvelope, TransactionExt, TransactionV1Envelope,
+    Uint256, VecM, WriteXdr,
 };
 
 /// Format a Stellar strkey value as a `std::string::String`.
@@ -181,7 +181,10 @@ pub fn verify_signed_envelope(
         return Err(CoreError::InvalidChallenge);
     }
     let op = &tx.operations[0];
-    let client_muxed = op.source_account.as_ref().ok_or(CoreError::InvalidChallenge)?;
+    let client_muxed = op
+        .source_account
+        .as_ref()
+        .ok_or(CoreError::InvalidChallenge)?;
     let client_pubkey = muxed_to_ed25519(client_muxed)?;
 
     let manage_data = match &op.body {
@@ -194,11 +197,16 @@ pub fn verify_signed_envelope(
     if manage_data.data_name.0.as_slice() != expected_name.as_bytes() {
         return Err(CoreError::InvalidChallenge);
     }
-    let dv = manage_data.data_value.as_ref().ok_or(CoreError::InvalidChallenge)?;
+    let dv = manage_data
+        .data_value
+        .as_ref()
+        .ok_or(CoreError::InvalidChallenge)?;
     if dv.0.len() != 64 {
         return Err(CoreError::InvalidChallenge);
     }
-    let decoded = B64.decode(dv.0.as_slice()).map_err(|_| CoreError::InvalidChallenge)?;
+    let decoded = B64
+        .decode(dv.0.as_slice())
+        .map_err(|_| CoreError::InvalidChallenge)?;
     if decoded.len() != NONCE_BYTES {
         return Err(CoreError::InvalidChallenge);
     }
@@ -333,18 +341,25 @@ mod tests {
         let server_key = SigningKey::from_bytes(&server_seed);
         let client_key = SigningKey::from_bytes(&client_seed);
 
-        let server_strkey = strkey_to_string(
-            stellar_strkey::ed25519::PublicKey(server_key.verifying_key().to_bytes()),
-        );
-        let client_strkey = strkey_to_string(
-            stellar_strkey::ed25519::PublicKey(client_key.verifying_key().to_bytes()),
-        );
+        let server_strkey = strkey_to_string(stellar_strkey::ed25519::PublicKey(
+            server_key.verifying_key().to_bytes(),
+        ));
+        let client_strkey = strkey_to_string(stellar_strkey::ed25519::PublicKey(
+            client_key.verifying_key().to_bytes(),
+        ));
 
         let network = STANDALONE_PASSPHRASE;
         let domain = "smoke.local";
 
-        let built = build_challenge(&server_key, &server_strkey, &client_strkey, network, domain, 900)
-            .expect("build_challenge");
+        let built = build_challenge(
+            &server_key,
+            &server_strkey,
+            &client_strkey,
+            network,
+            domain,
+            900,
+        )
+        .expect("build_challenge");
 
         // Client receives the envelope, parses, signs, returns.
         let mut envelope =
@@ -355,20 +370,18 @@ mod tests {
         attach_signature(&mut envelope, client_sig).expect("attach");
         let signed_b64 = envelope.to_xdr_base64(Limits::none()).expect("re-encode");
 
-        let verified = verify_signed_envelope(&signed_b64, &server_strkey, network, domain)
-            .expect("verify");
+        let verified =
+            verify_signed_envelope(&signed_b64, &server_strkey, network, domain).expect("verify");
         assert_eq!(verified.client_account_strkey, client_strkey);
     }
 
     #[test]
     fn rejects_envelope_with_only_server_sig() {
         let server_key = SigningKey::from_bytes(&[0x42u8; 32]);
-        let client_strkey = strkey_to_string(
-            stellar_strkey::ed25519::PublicKey([0xAAu8; 32]),
-        );
-        let server_strkey = strkey_to_string(
-            stellar_strkey::ed25519::PublicKey(server_key.verifying_key().to_bytes()),
-        );
+        let client_strkey = strkey_to_string(stellar_strkey::ed25519::PublicKey([0xAAu8; 32]));
+        let server_strkey = strkey_to_string(stellar_strkey::ed25519::PublicKey(
+            server_key.verifying_key().to_bytes(),
+        ));
 
         let built = build_challenge(
             &server_key,
@@ -395,12 +408,12 @@ mod tests {
     fn rejects_wrong_domain() {
         let server_key = SigningKey::from_bytes(&[0x42u8; 32]);
         let client_key = SigningKey::from_bytes(&[0x99u8; 32]);
-        let server_strkey = strkey_to_string(
-            stellar_strkey::ed25519::PublicKey(server_key.verifying_key().to_bytes()),
-        );
-        let client_strkey = strkey_to_string(
-            stellar_strkey::ed25519::PublicKey(client_key.verifying_key().to_bytes()),
-        );
+        let server_strkey = strkey_to_string(stellar_strkey::ed25519::PublicKey(
+            server_key.verifying_key().to_bytes(),
+        ));
+        let client_strkey = strkey_to_string(stellar_strkey::ed25519::PublicKey(
+            client_key.verifying_key().to_bytes(),
+        ));
 
         let built = build_challenge(
             &server_key,

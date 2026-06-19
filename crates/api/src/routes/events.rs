@@ -139,8 +139,10 @@ async fn run_session(
         }
     };
 
-    let _ = session.close(Some(actix_ws::CloseReason {
-        code: actix_ws::CloseCode::Normal,
-        description: Some(close_reason.into()),
-    })).await;
+    let _ = session
+        .close(Some(actix_ws::CloseReason {
+            code: actix_ws::CloseCode::Normal,
+            description: Some(close_reason.into()),
+        }))
+        .await;
 }

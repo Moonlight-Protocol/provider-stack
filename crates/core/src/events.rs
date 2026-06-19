@@ -9,9 +9,7 @@ use crate::mlxdr::{classify, OperationKind};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value as JsonValue};
-use soroban_client::xdr::{
-    AccountId, Limits, PublicKey, ReadXdr, ScAddress, ScVal, Uint256,
-};
+use soroban_client::xdr::{AccountId, Limits, PublicKey, ReadXdr, ScAddress, ScVal, Uint256};
 use tokio::sync::broadcast;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -122,10 +120,7 @@ impl ProviderEvent {
         )
     }
 
-    pub fn channel_provider_added(
-        scope: EventScope,
-        channel_contract_id: &str,
-    ) -> Self {
+    pub fn channel_provider_added(scope: EventScope, channel_contract_id: &str) -> Self {
         Self::new(
             "channel.provider_added",
             scope,
@@ -209,11 +204,7 @@ impl EventBroadcaster {
     }
 
     pub fn current_scope(&self) -> EventScope {
-        let label = self
-            .pp_label
-            .read()
-            .ok()
-            .and_then(|g| g.clone());
+        let label = self.pp_label.read().ok().and_then(|g| g.clone());
         EventScope {
             pp_public_key: self.pp_public_key.clone(),
             pp_label: label,
@@ -267,8 +258,7 @@ pub fn summarize_bundle(
     // Spend + Withdraw are EXPENSIVE, Create + Deposit are CHEAP.
     let expensive_count = classified.spend.len() + classified.withdraw.len();
     let cheap_count = classified.create.len() + classified.deposit.len();
-    let weight: u32 = expensive_count as u32 * expensive_weight
-        + cheap_count as u32 * cheap_weight;
+    let weight: u32 = expensive_count as u32 * expensive_weight + cheap_count as u32 * cheap_weight;
 
     let total_deposit: i128 = classified.deposit.iter().map(|o| o.amount).sum();
     let total_withdraw: i128 = classified.withdraw.iter().map(|o| o.amount).sum();

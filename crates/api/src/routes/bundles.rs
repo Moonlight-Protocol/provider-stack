@@ -10,7 +10,9 @@ use crate::middleware_auth::EntityAuth;
 use crate::state::AppState;
 use actix_web::{get, post, web, HttpResponse, Responder};
 use chrono::{Duration, Utc};
-use provider_stack_core::bundle::{add_bundle, classify_bundle, derive_fee_from_classified, AddBundleInput};
+use provider_stack_core::bundle::{
+    add_bundle, classify_bundle, derive_fee_from_classified, AddBundleInput,
+};
 use provider_stack_persistence::OperationsBundleRepo;
 use provider_stack_sdk::channel::fetch_utxo_balances;
 use serde::{Deserialize, Serialize};
@@ -61,7 +63,10 @@ pub async fn post_submit(
         return Err(ApiError::Forbidden);
     }
 
-    let SubmitReq { operations_mlxdr, channel_contract_id } = body.into_inner();
+    let SubmitReq {
+        operations_mlxdr,
+        channel_contract_id,
+    } = body.into_inner();
 
     let op_count = operations_mlxdr.as_array().map(|a| a.len()).unwrap_or(0);
     if op_count == 0 {
@@ -96,8 +101,7 @@ pub async fn post_submit(
     if let Some(ref ch) = channel_contract_id {
         let channels = provider_stack_persistence::ChannelStateRepo::new(state.pool.clone());
         if channels.is_disabled(ch).await? {
-            let withdraw_only = classified.deposit.is_empty()
-                && !classified.withdraw.is_empty();
+            let withdraw_only = classified.deposit.is_empty() && !classified.withdraw.is_empty();
             if !withdraw_only {
                 tracing::info!(
                     channel = %ch,
@@ -110,19 +114,21 @@ pub async fn post_submit(
 
     // Fetch on-chain balances for Spend UTXOs (if any).
     let spend_balances: Vec<i128> = if !spend_utxos.is_empty() {
-        let channel = channel_contract_id
-            .as_deref()
-            .ok_or_else(|| ApiError::BadRequest(
+        let channel = channel_contract_id.as_deref().ok_or_else(|| {
+            ApiError::BadRequest(
                 "channelContractId is required when bundle contains Spend ops".into(),
-            ))?;
+            )
+        })?;
         let server = Server::new(
             &state.config.stellar_rpc_url,
-            Options { allow_http: true, ..Options::default() },
+            Options {
+                allow_http: true,
+                ..Options::default()
+            },
         )
         .map_err(|e| ApiError::Internal(format!("Server::new: {e:?}")))?;
-        let signing = provider_stack_core::auth::sep10::signing_key_from_seed(
-            &state.config.pp_secret_key,
-        )?;
+        let signing =
+            provider_stack_core::auth::sep10::signing_key_from_seed(&state.config.pp_secret_key)?;
         let pp_pubkey_strkey = format!(
             "{}",
             stellar_strkey::ed25519::PublicKey(signing.verifying_key().to_bytes())
@@ -186,9 +192,7 @@ pub async fn list_entity(
     _state: web::Data<AppState>,
     _auth: EntityAuth,
 ) -> Result<impl Responder, ApiError> {
-    Ok::<_, ApiError>(
-        HttpResponse::Ok().json(Data::new(EntityBundlesList { bundles: vec![] })),
-    )
+    Ok::<_, ApiError>(HttpResponse::Ok().json(Data::new(EntityBundlesList { bundles: vec![] })))
 }
 
 #[derive(Serialize)]

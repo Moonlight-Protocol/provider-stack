@@ -118,26 +118,36 @@ async fn mount_health(rpc: &MockServer) {
 
 #[actix_web::test]
 async fn provider_added_event_promotes_membership_to_active() {
-    let Some(db) = skip_if_no_db().await else { return; };
+    let Some(db) = skip_if_no_db().await else {
+        return;
+    };
     seed_pending_membership(&db).await;
 
     let rpc = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/"))
         .and(body_partial_json(json!({ "method": "getEvents" })))
-        .respond_with(ResponseTemplate::new(200).set_body_json(events_response(
-            &topic_b64("provider_added"),
-            "cursor-1",
-        )))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(events_response(&topic_b64("provider_added"), "cursor-1")),
+        )
         .mount(&rpc)
         .await;
     mount_health(&rpc).await;
 
-    let server = Server::new(&rpc.uri(), Options { allow_http: true, ..Options::default() })
-        .expect("Server::new");
+    let server = Server::new(
+        &rpc.uri(),
+        Options {
+            allow_http: true,
+            ..Options::default()
+        },
+    )
+    .expect("Server::new");
     let events = EventBroadcaster::new(256, "GTESTPP".to_string());
     let mut cursors = HashMap::new();
-    run_tick(&server, &db.pool, &events, &mut cursors).await.expect("watcher tick");
+    run_tick(&server, &db.pool, &events, &mut cursors)
+        .await
+        .expect("watcher tick");
 
     let status: String = sqlx::query_scalar(
         "SELECT status::text FROM council_memberships WHERE channel_auth_id = $1",
@@ -150,35 +160,50 @@ async fn provider_added_event_promotes_membership_to_active() {
 
     // Cursor advanced in memory (no durable store), so a subsequent tick would
     // resume after it rather than re-seed from oldest.
-    assert_eq!(cursors.get(CHANNEL_AUTH_ID).map(String::as_str), Some("cursor-1"));
+    assert_eq!(
+        cursors.get(CHANNEL_AUTH_ID).map(String::as_str),
+        Some("cursor-1")
+    );
 
     db.cleanup().await;
 }
 
 #[actix_web::test]
 async fn provider_removed_event_marks_membership_rejected() {
-    let Some(db) = skip_if_no_db().await else { return; };
+    let Some(db) = skip_if_no_db().await else {
+        return;
+    };
     seed_pending_membership(&db).await;
     // Pre-promote it to ACTIVE so the removed path is exercised.
     let repo = CouncilMembershipRepo::new(db.pool.clone());
-    repo.set_status(CHANNEL_AUTH_ID, CouncilMembershipStatus::Active).await.unwrap();
+    repo.set_status(CHANNEL_AUTH_ID, CouncilMembershipStatus::Active)
+        .await
+        .unwrap();
 
     let rpc = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/"))
         .and(body_partial_json(json!({ "method": "getEvents" })))
-        .respond_with(ResponseTemplate::new(200).set_body_json(events_response(
-            &topic_b64("provider_removed"),
-            "cursor-2",
-        )))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(events_response(&topic_b64("provider_removed"), "cursor-2")),
+        )
         .mount(&rpc)
         .await;
     mount_health(&rpc).await;
 
-    let server = Server::new(&rpc.uri(), Options { allow_http: true, ..Options::default() })
-        .expect("Server::new");
+    let server = Server::new(
+        &rpc.uri(),
+        Options {
+            allow_http: true,
+            ..Options::default()
+        },
+    )
+    .expect("Server::new");
     let events = EventBroadcaster::new(256, "GTESTPP".to_string());
-    run_tick(&server, &db.pool, &events, &mut HashMap::new()).await.expect("watcher tick");
+    run_tick(&server, &db.pool, &events, &mut HashMap::new())
+        .await
+        .expect("watcher tick");
 
     let status: String = sqlx::query_scalar(
         "SELECT status::text FROM council_memberships WHERE channel_auth_id = $1",
@@ -194,7 +219,9 @@ async fn provider_removed_event_marks_membership_rejected() {
 
 #[actix_web::test]
 async fn empty_events_response_leaves_membership_unchanged() {
-    let Some(db) = skip_if_no_db().await else { return; };
+    let Some(db) = skip_if_no_db().await else {
+        return;
+    };
     seed_pending_membership(&db).await;
 
     let rpc = MockServer::start().await;
@@ -206,10 +233,18 @@ async fn empty_events_response_leaves_membership_unchanged() {
         .await;
     mount_health(&rpc).await;
 
-    let server = Server::new(&rpc.uri(), Options { allow_http: true, ..Options::default() })
-        .expect("Server::new");
+    let server = Server::new(
+        &rpc.uri(),
+        Options {
+            allow_http: true,
+            ..Options::default()
+        },
+    )
+    .expect("Server::new");
     let events = EventBroadcaster::new(256, "GTESTPP".to_string());
-    run_tick(&server, &db.pool, &events, &mut HashMap::new()).await.expect("watcher tick");
+    run_tick(&server, &db.pool, &events, &mut HashMap::new())
+        .await
+        .expect("watcher tick");
 
     let status: String = sqlx::query_scalar(
         "SELECT status::text FROM council_memberships WHERE channel_auth_id = $1",

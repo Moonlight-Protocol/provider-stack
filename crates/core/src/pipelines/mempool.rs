@@ -12,9 +12,7 @@
 
 use crate::config::Config;
 use crate::events::{summarize_bundle, EventBroadcaster, ProviderEvent, Submitter};
-use provider_stack_persistence::{
-    BundleStatus, EntityRepo, OperationsBundleRepo, PgPool,
-};
+use provider_stack_persistence::{BundleStatus, EntityRepo, OperationsBundleRepo, PgPool};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::time::{interval, MissedTickBehavior};
@@ -38,7 +36,10 @@ pub async fn run(config: Arc<Config>, pool: PgPool, events: EventBroadcaster) {
         drop(guard);
 
         let tick_span = tracing::info_span!("Mempool.tick");
-        if let Err(e) = run_tick(&repo, &entities, &config, &events).instrument(tick_span).await {
+        if let Err(e) = run_tick(&repo, &entities, &config, &events)
+            .instrument(tick_span)
+            .await
+        {
             warn!(error = %e, "mempool tick failed");
         }
         debug!("mempool tick complete");
@@ -60,15 +61,17 @@ pub async fn run_tick(
     // 1. Sweep expired (PENDING + ttl < now → EXPIRED).
     let pending: Vec<provider_stack_persistence::OperationsBundle> =
         repo.list_by_status(BundleStatus::Pending, 256).await?;
-    let (expired, fresh): (Vec<_>, Vec<_>) =
-        pending.into_iter().partition(|b| b.ttl < now);
+    let (expired, fresh): (Vec<_>, Vec<_>) = pending.into_iter().partition(|b| b.ttl < now);
     for b in &expired {
         repo.set_status(&b.id, BundleStatus::Expired).await?;
     }
 
     // 2. Promote up to slot_capacity, oldest-first.
     let processing_now: Vec<provider_stack_persistence::OperationsBundle> = repo
-        .list_by_status(BundleStatus::Processing, config.mempool.slot_capacity as i64)
+        .list_by_status(
+            BundleStatus::Processing,
+            config.mempool.slot_capacity as i64,
+        )
         .await?;
     let processing_count_before = processing_now.len();
     let free_slots = config
@@ -93,19 +96,14 @@ pub async fn run_tick(
                 continue;
             }
         };
-        let (entity_name, jurisdictions): (Option<String>, Vec<String>) = match b
-            .created_by
-            .as_deref()
-        {
-            Some(eid) => match entities.find_by_id(eid).await {
-                Ok(Some(entity)) => (
-                    entity.name,
-                    entity.jurisdictions.unwrap_or_default(),
-                ),
-                _ => (None, Vec::new()),
-            },
-            None => (None, Vec::new()),
-        };
+        let (entity_name, jurisdictions): (Option<String>, Vec<String>) =
+            match b.created_by.as_deref() {
+                Some(eid) => match entities.find_by_id(eid).await {
+                    Ok(Some(entity)) => (entity.name, entity.jurisdictions.unwrap_or_default()),
+                    _ => (None, Vec::new()),
+                },
+                None => (None, Vec::new()),
+            };
         let new_slot = (processing_count_before + promotions) == 0;
         let ev = ProviderEvent::mempool_bundle_added(
             events.current_scope(),

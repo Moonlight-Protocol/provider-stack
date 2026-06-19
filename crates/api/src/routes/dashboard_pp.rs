@@ -38,9 +38,8 @@ pub struct PpRecord {
 }
 
 fn pp_public_strkey_from_env(state: &AppState) -> Result<String, ApiError> {
-    let signing = provider_stack_core::auth::sep10::signing_key_from_seed(
-        &state.config.pp_secret_key,
-    )?;
+    let signing =
+        provider_stack_core::auth::sep10::signing_key_from_seed(&state.config.pp_secret_key)?;
     Ok(format!(
         "{}",
         stellar_strkey::ed25519::PublicKey(signing.verifying_key().to_bytes())

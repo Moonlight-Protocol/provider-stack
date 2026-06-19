@@ -134,7 +134,11 @@ pub async fn run_tick(
                     warn!(error = %ce, "out-of-retention recovery: convergence failed");
                 }
                 result = server
-                    .get_events(Pagination::From(min_ledger), vec![build_filter()], EVENT_LIMIT)
+                    .get_events(
+                        Pagination::From(min_ledger),
+                        vec![build_filter()],
+                        EVENT_LIMIT,
+                    )
                     .await;
             }
         }
@@ -170,7 +174,9 @@ pub async fn run_tick(
 /// 5xx leaves the table untouched, the next live event still applies a
 /// delta, and we'll re-converge at the next retention recovery or boot.
 async fn converge_channel_states(pool: &PgPool) -> anyhow::Result<()> {
-    let memberships = CouncilMembershipRepo::new(pool.clone()).list_active().await?;
+    let memberships = CouncilMembershipRepo::new(pool.clone())
+        .list_active()
+        .await?;
     if memberships.is_empty() {
         return Ok(());
     }
@@ -256,14 +262,16 @@ async fn apply_event(
     let topic = topic_symbol(first);
     match topic.as_deref() {
         Some("provider_added") => {
-            repo.set_status(channel_auth_id, CouncilMembershipStatus::Active).await?;
+            repo.set_status(channel_auth_id, CouncilMembershipStatus::Active)
+                .await?;
             events.send(ProviderEvent::channel_provider_added(
                 events.current_scope(),
                 channel_auth_id,
             ));
         }
         Some("provider_removed") => {
-            repo.set_status(channel_auth_id, CouncilMembershipStatus::Rejected).await?;
+            repo.set_status(channel_auth_id, CouncilMembershipStatus::Rejected)
+                .await?;
         }
         // UC6: the council's quorum-authorized record that an asset channel was
         // enabled or disabled. Topic[1] is the privacy-channel contract id;
@@ -282,7 +290,9 @@ async fn apply_event(
                 ledger = ?ledger,
                 "channel_state_changed: applying council disable/enable"
             );
-            channels.apply_state(&channel_addr, !enabled, ledger).await?;
+            channels
+                .apply_state(&channel_addr, !enabled, ledger)
+                .await?;
         }
         _ => {}
     }

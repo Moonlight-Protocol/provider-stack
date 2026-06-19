@@ -6,9 +6,9 @@
 //! to compile.
 
 use crate::error::ApiError;
-use actix_web::{web, HttpResponse};
 #[cfg(feature = "embed-spa")]
 use actix_web::http::header::CONTENT_TYPE;
+use actix_web::{web, HttpResponse};
 
 #[cfg(feature = "embed-spa")]
 static SPA_DIR: include_dir::Dir<'_> =

@@ -17,11 +17,7 @@ mod common;
 use actix_web::{web, App, HttpServer};
 use ed25519_dalek::SigningKey;
 use futures_util::{SinkExt, StreamExt};
-use provider_stack_api::{
-    routes::events::EVENTS_WS_SUBPROTOCOL,
-    routing,
-    state::AppState,
-};
+use provider_stack_api::{routes::events::EVENTS_WS_SUBPROTOCOL, routing, state::AppState};
 use provider_stack_core::{
     auth::{mint_token, sep43::NonceStore, JwtKind},
     config::{Config, MempoolConfig},
@@ -32,7 +28,8 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::timeout;
 use tokio_tungstenite::tungstenite::{
-    client::IntoClientRequest, handshake::client::generate_key, http::HeaderValue, protocol::Message,
+    client::IntoClientRequest, handshake::client::generate_key, http::HeaderValue,
+    protocol::Message,
 };
 
 fn strkey(pk_bytes: [u8; 32]) -> String {
@@ -45,7 +42,11 @@ fn make_state(events: EventBroadcaster) -> AppState {
         .connect_lazy("postgres://test:test@127.0.0.1:65535/never_used")
         .expect("lazy pool");
 
-    let operator_pubkey = strkey(SigningKey::from_bytes(&[0xCCu8; 32]).verifying_key().to_bytes());
+    let operator_pubkey = strkey(
+        SigningKey::from_bytes(&[0xCCu8; 32])
+            .verifying_key()
+            .to_bytes(),
+    );
 
     let config = Arc::new(Config {
         port: 0,
@@ -87,7 +88,11 @@ fn make_state(events: EventBroadcaster) -> AppState {
 }
 
 fn entity_jwt(state: &AppState) -> String {
-    let entity_pubkey = strkey(SigningKey::from_bytes(&[0xEEu8; 32]).verifying_key().to_bytes());
+    let entity_pubkey = strkey(
+        SigningKey::from_bytes(&[0xEEu8; 32])
+            .verifying_key()
+            .to_bytes(),
+    );
     mint_token(
         state.config.service_auth_secret.as_bytes(),
         &state.config.service_domain,
@@ -160,7 +165,10 @@ async fn ws_subprotocol_negotiated_event_arrives_and_ping_is_answered() {
         .and_then(|v| v.to_str().ok())
         .map(|s| s.to_string())
         .expect("server must select a subprotocol");
-    assert_eq!(chosen, EVENTS_WS_SUBPROTOCOL, "server picked the wrong subprotocol");
+    assert_eq!(
+        chosen, EVENTS_WS_SUBPROTOCOL,
+        "server picked the wrong subprotocol"
+    );
 
     // (2) Broadcast an event; client must receive matching Text within 1 s.
     events.send(ProviderEvent::verifier_bundle_completed(
@@ -188,7 +196,10 @@ async fn ws_subprotocol_negotiated_event_arrives_and_ping_is_answered() {
 
     // (3) Send a client Ping; server must echo back a Pong with the same payload.
     let ping_payload = b"hb-1".to_vec();
-    ws_stream.send(Message::Ping(ping_payload.clone())).await.unwrap();
+    ws_stream
+        .send(Message::Ping(ping_payload.clone()))
+        .await
+        .unwrap();
     let pong = timeout(Duration::from_secs(1), ws_stream.next())
         .await
         .expect("pong timeout")

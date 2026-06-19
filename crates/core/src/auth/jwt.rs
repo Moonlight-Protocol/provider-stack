@@ -39,8 +39,12 @@ pub fn mint_token(
         kind,
         session_id: session_id.to_string(),
     };
-    encode(&Header::default(), &claims, &EncodingKey::from_secret(secret))
-        .map_err(|e| CoreError::Jwt(e.to_string()))
+    encode(
+        &Header::default(),
+        &claims,
+        &EncodingKey::from_secret(secret),
+    )
+    .map_err(|e| CoreError::Jwt(e.to_string()))
 }
 
 pub fn verify_token(secret: &[u8], token: &str) -> Result<JwtClaims, CoreError> {

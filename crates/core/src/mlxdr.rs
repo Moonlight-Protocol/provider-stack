@@ -82,7 +82,9 @@ pub enum MlxdrError {
 
 /// Decode an MLXDR string into a typed operation summary used for classification + fee calc.
 pub fn decode(mlxdr_b64: &str) -> Result<DecodedOperation, MlxdrError> {
-    let bytes = B64.decode(mlxdr_b64).map_err(|e| MlxdrError::Base64(e.to_string()))?;
+    let bytes = B64
+        .decode(mlxdr_b64)
+        .map_err(|e| MlxdrError::Base64(e.to_string()))?;
     if bytes.len() < 3 {
         return Err(MlxdrError::TooShort);
     }
@@ -92,8 +94,8 @@ pub fn decode(mlxdr_b64: &str) -> Result<DecodedOperation, MlxdrError> {
     let kind = OperationKind::from_type_byte(bytes[2])?;
 
     // Remainder is stellar-xdr of ScVal::Vec([operation_scval, signature_scval]).
-    let outer = ScVal::from_xdr(&bytes[3..], Limits::none())
-        .map_err(|e| MlxdrError::Xdr(e.to_string()))?;
+    let outer =
+        ScVal::from_xdr(&bytes[3..], Limits::none()).map_err(|e| MlxdrError::Xdr(e.to_string()))?;
     let scvec = match outer {
         ScVal::Vec(Some(v)) => v.0,
         _ => return Err(MlxdrError::BadShape("outer must be ScVec(Some(..))")),
@@ -112,18 +114,18 @@ pub fn decode(mlxdr_b64: &str) -> Result<DecodedOperation, MlxdrError> {
             if payload.len() != 2 {
                 return Err(MlxdrError::BadShape("Create payload must be 2 fields"));
             }
-            let utxo = scbytes(&payload[0])
-                .ok_or(MlxdrError::BadShape("Create.utxo must be ScBytes"))?;
-            let amount = sci128(&payload[1])
-                .ok_or(MlxdrError::BadShape("Create.amount must be ScI128"))?;
+            let utxo =
+                scbytes(&payload[0]).ok_or(MlxdrError::BadShape("Create.utxo must be ScBytes"))?;
+            let amount =
+                sci128(&payload[1]).ok_or(MlxdrError::BadShape("Create.amount must be ScI128"))?;
             (utxo, amount)
         }
         OperationKind::Spend => {
             if payload.is_empty() {
                 return Err(MlxdrError::BadShape("Spend payload must have ≥1 field"));
             }
-            let utxo = scbytes(&payload[0])
-                .ok_or(MlxdrError::BadShape("Spend.utxo must be ScBytes"))?;
+            let utxo =
+                scbytes(&payload[0]).ok_or(MlxdrError::BadShape("Spend.utxo must be ScBytes"))?;
             (utxo, 0i128)
         }
         OperationKind::Deposit | OperationKind::Withdraw => {
@@ -133,8 +135,8 @@ pub fn decode(mlxdr_b64: &str) -> Result<DecodedOperation, MlxdrError> {
                     "Deposit/Withdraw payload must have ≥2 fields",
                 ));
             }
-            let amount = sci128(&payload[1])
-                .ok_or(MlxdrError::BadShape("amount must be ScI128"))?;
+            let amount =
+                sci128(&payload[1]).ok_or(MlxdrError::BadShape("amount must be ScI128"))?;
             (Vec::new(), amount)
         }
     };
@@ -210,7 +212,9 @@ pub fn extract_user_signed_entries(
 ) -> Result<Vec<UserSignedSlot>, MlxdrError> {
     let mut out: Vec<UserSignedSlot> = Vec::new();
     for s in mlxdr_strings {
-        let bytes = B64.decode(s).map_err(|e| MlxdrError::Base64(e.to_string()))?;
+        let bytes = B64
+            .decode(s)
+            .map_err(|e| MlxdrError::Base64(e.to_string()))?;
         if bytes.len() < 3 {
             return Err(MlxdrError::TooShort);
         }
@@ -293,7 +297,9 @@ pub fn extract_user_spend_signatures(
     use soroban_client::xdr::Int128Parts;
     let mut out: Vec<UserSpendSignature> = Vec::new();
     for s in mlxdr_strings {
-        let bytes = B64.decode(s).map_err(|e| MlxdrError::Base64(e.to_string()))?;
+        let bytes = B64
+            .decode(s)
+            .map_err(|e| MlxdrError::Base64(e.to_string()))?;
         if bytes.len() < 3 {
             return Err(MlxdrError::TooShort);
         }
@@ -373,8 +379,8 @@ pub fn build_fee_create_op(utxo_pubkey: &[u8; 65], fee: i128) -> Result<ScVal, M
         lo: ((fee as u128) & 0xFFFF_FFFF_FFFF_FFFF) as u64,
     };
     let tuple = vec![ScVal::Bytes(ScBytes(utxo_bytes)), ScVal::I128(amount)];
-    let vecm: VecM<ScVal> = VecM::try_from(tuple)
-        .map_err(|e| MlxdrError::Xdr(format!("VecM fee tuple: {e}")))?;
+    let vecm: VecM<ScVal> =
+        VecM::try_from(tuple).map_err(|e| MlxdrError::Xdr(format!("VecM fee tuple: {e}")))?;
     Ok(ScVal::Vec(Some(ScVec(vecm))))
 }
 
@@ -392,7 +398,9 @@ pub fn aggregate_to_channel_operation_with_fee_create(
     let mut withdraw_ops: Vec<ScVal> = Vec::new();
 
     for s in mlxdr_strings {
-        let bytes = B64.decode(s).map_err(|e| MlxdrError::Base64(e.to_string()))?;
+        let bytes = B64
+            .decode(s)
+            .map_err(|e| MlxdrError::Base64(e.to_string()))?;
         if bytes.len() < 3 {
             return Err(MlxdrError::TooShort);
         }
@@ -420,8 +428,8 @@ pub fn aggregate_to_channel_operation_with_fee_create(
     create_ops.push(extra_create);
 
     fn vec_of(ops: Vec<ScVal>) -> Result<ScVal, MlxdrError> {
-        let vecm: VecM<ScVal> = VecM::try_from(ops)
-            .map_err(|e| MlxdrError::Xdr(format!("VecM build: {e}")))?;
+        let vecm: VecM<ScVal> =
+            VecM::try_from(ops).map_err(|e| MlxdrError::Xdr(format!("VecM build: {e}")))?;
         Ok(ScVal::Vec(Some(ScVec(vecm))))
     }
     fn sym(s: &'static str) -> Result<ScVal, MlxdrError> {
@@ -431,13 +439,25 @@ pub fn aggregate_to_channel_operation_with_fee_create(
     }
 
     let entries = vec![
-        ScMapEntry { key: sym("create")?,   val: vec_of(create_ops)? },
-        ScMapEntry { key: sym("deposit")?,  val: vec_of(deposit_ops)? },
-        ScMapEntry { key: sym("spend")?,    val: vec_of(spend_ops)? },
-        ScMapEntry { key: sym("withdraw")?, val: vec_of(withdraw_ops)? },
+        ScMapEntry {
+            key: sym("create")?,
+            val: vec_of(create_ops)?,
+        },
+        ScMapEntry {
+            key: sym("deposit")?,
+            val: vec_of(deposit_ops)?,
+        },
+        ScMapEntry {
+            key: sym("spend")?,
+            val: vec_of(spend_ops)?,
+        },
+        ScMapEntry {
+            key: sym("withdraw")?,
+            val: vec_of(withdraw_ops)?,
+        },
     ];
-    let map: VecM<ScMapEntry> = VecM::try_from(entries)
-        .map_err(|e| MlxdrError::Xdr(format!("ScMap build: {e}")))?;
+    let map: VecM<ScMapEntry> =
+        VecM::try_from(entries).map_err(|e| MlxdrError::Xdr(format!("ScMap build: {e}")))?;
     Ok(ScVal::Map(Some(ScMap(map))))
 }
 
@@ -450,7 +470,9 @@ pub fn aggregate_to_channel_operation(mlxdr_strings: &[&str]) -> Result<ScVal, M
     let mut withdraw_ops: Vec<ScVal> = Vec::new();
 
     for s in mlxdr_strings {
-        let bytes = B64.decode(s).map_err(|e| MlxdrError::Base64(e.to_string()))?;
+        let bytes = B64
+            .decode(s)
+            .map_err(|e| MlxdrError::Base64(e.to_string()))?;
         if bytes.len() < 3 {
             return Err(MlxdrError::TooShort);
         }
@@ -477,8 +499,8 @@ pub fn aggregate_to_channel_operation(mlxdr_strings: &[&str]) -> Result<ScVal, M
     }
 
     fn vec_of(ops: Vec<ScVal>) -> Result<ScVal, MlxdrError> {
-        let vecm: VecM<ScVal> = VecM::try_from(ops)
-            .map_err(|e| MlxdrError::Xdr(format!("VecM build: {e}")))?;
+        let vecm: VecM<ScVal> =
+            VecM::try_from(ops).map_err(|e| MlxdrError::Xdr(format!("VecM build: {e}")))?;
         Ok(ScVal::Vec(Some(ScVec(vecm))))
     }
 
@@ -490,13 +512,25 @@ pub fn aggregate_to_channel_operation(mlxdr_strings: &[&str]) -> Result<ScVal, M
 
     // Keys must be in lexicographic order: create < deposit < spend < withdraw.
     let entries = vec![
-        ScMapEntry { key: sym("create")?,   val: vec_of(create_ops)? },
-        ScMapEntry { key: sym("deposit")?,  val: vec_of(deposit_ops)? },
-        ScMapEntry { key: sym("spend")?,    val: vec_of(spend_ops)? },
-        ScMapEntry { key: sym("withdraw")?, val: vec_of(withdraw_ops)? },
+        ScMapEntry {
+            key: sym("create")?,
+            val: vec_of(create_ops)?,
+        },
+        ScMapEntry {
+            key: sym("deposit")?,
+            val: vec_of(deposit_ops)?,
+        },
+        ScMapEntry {
+            key: sym("spend")?,
+            val: vec_of(spend_ops)?,
+        },
+        ScMapEntry {
+            key: sym("withdraw")?,
+            val: vec_of(withdraw_ops)?,
+        },
     ];
-    let map: VecM<ScMapEntry> = VecM::try_from(entries)
-        .map_err(|e| MlxdrError::Xdr(format!("ScMap build: {e}")))?;
+    let map: VecM<ScMapEntry> =
+        VecM::try_from(entries).map_err(|e| MlxdrError::Xdr(format!("ScMap build: {e}")))?;
     Ok(ScVal::Map(Some(ScMap(map))))
 }
 
@@ -555,9 +589,7 @@ pub fn calculate_fee(a: Amounts) -> i128 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use soroban_client::xdr::{
-        Int128Parts, ScAddress, ScBytes, ScVal, ScVec, VecM, WriteXdr,
-    };
+    use soroban_client::xdr::{Int128Parts, ScAddress, ScBytes, ScVal, ScVec, VecM, WriteXdr};
 
     fn i128_to_parts(v: i128) -> Int128Parts {
         Int128Parts {

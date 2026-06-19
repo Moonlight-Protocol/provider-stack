@@ -65,7 +65,8 @@ fn account_entry_data_b64(pp_pubkey_bytes: [u8; 32], seq: i64) -> String {
         ext: AccountEntryExt::V0,
     };
     let data = LedgerEntryData::Account(entry);
-    data.to_xdr_base64(Limits::none()).expect("encode account entry data")
+    data.to_xdr_base64(Limits::none())
+        .expect("encode account entry data")
 }
 
 fn ledger_entries_response(pp_pubkey_bytes: [u8; 32]) -> Value {
@@ -134,7 +135,9 @@ fn cfg(rpc_url: &str) -> Arc<Config> {
 
 #[actix_web::test]
 async fn processing_bundle_submitted_and_tx_row_recorded() {
-    let Some(db) = skip_if_no_db().await else { return; };
+    let Some(db) = skip_if_no_db().await else {
+        return;
+    };
 
     let rpc = MockServer::start().await;
     let pp_pubkey_bytes = SigningKey::from_bytes(&pp_keypair_seed())
@@ -144,14 +147,18 @@ async fn processing_bundle_submitted_and_tx_row_recorded() {
     Mock::given(method("POST"))
         .and(path("/"))
         .and(body_partial_json(json!({ "method": "getLedgerEntries" })))
-        .respond_with(ResponseTemplate::new(200).set_body_json(ledger_entries_response(pp_pubkey_bytes)))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(ledger_entries_response(pp_pubkey_bytes)),
+        )
         .mount(&rpc)
         .await;
 
     Mock::given(method("POST"))
         .and(path("/"))
         .and(body_partial_json(json!({ "method": "sendTransaction" })))
-        .respond_with(ResponseTemplate::new(200).set_body_json(send_tx_response("TX_HASH_FROM_RPC")))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(send_tx_response("TX_HASH_FROM_RPC")),
+        )
         .mount(&rpc)
         .await;
 
@@ -178,10 +185,18 @@ async fn processing_bundle_submitted_and_tx_row_recorded() {
         .unwrap();
 
     let config = cfg(&rpc.uri());
-    let server =
-        Server::new(&rpc.uri(), Options { allow_http: true, ..Options::default() }).unwrap();
+    let server = Server::new(
+        &rpc.uri(),
+        Options {
+            allow_http: true,
+            ..Options::default()
+        },
+    )
+    .unwrap();
     let events = EventBroadcaster::new(256, "GTESTPP".to_string());
-    run_tick(&server, &db.pool, &config, &events).await.expect("executor tick");
+    run_tick(&server, &db.pool, &config, &events)
+        .await
+        .expect("executor tick");
 
     // transactions row inserted with the RPC-returned hash.
     let row = sqlx::query("SELECT id, status::text FROM transactions WHERE id = $1")
@@ -208,15 +223,25 @@ async fn processing_bundle_submitted_and_tx_row_recorded() {
 
 #[actix_web::test]
 async fn executor_skips_when_no_processing_bundles() {
-    let Some(db) = skip_if_no_db().await else { return; };
+    let Some(db) = skip_if_no_db().await else {
+        return;
+    };
     // No mocks needed — executor should make zero RPC calls.
     let rpc = MockServer::start().await;
 
     let config = cfg(&rpc.uri());
-    let server =
-        Server::new(&rpc.uri(), Options { allow_http: true, ..Options::default() }).unwrap();
+    let server = Server::new(
+        &rpc.uri(),
+        Options {
+            allow_http: true,
+            ..Options::default()
+        },
+    )
+    .unwrap();
     let events = EventBroadcaster::new(256, "GTESTPP".to_string());
-    run_tick(&server, &db.pool, &config, &events).await.expect("executor tick on empty");
+    run_tick(&server, &db.pool, &config, &events)
+        .await
+        .expect("executor tick on empty");
 
     let tx_count: i64 = sqlx::query_scalar("SELECT count(*) FROM transactions")
         .fetch_one(&db.pool)

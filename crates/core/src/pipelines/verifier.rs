@@ -53,7 +53,10 @@ pub async fn run(config: Arc<Config>, pool: PgPool, events: EventBroadcaster) {
         drop(guard);
 
         let tick_span = tracing::info_span!("Verifier.tick");
-        if let Err(e) = run_tick(&server, &pool, &events, &config).instrument(tick_span).await {
+        if let Err(e) = run_tick(&server, &pool, &events, &config)
+            .instrument(tick_span)
+            .await
+        {
             warn!(error = %e, "verifier tick failed");
         }
         debug!("verifier tick complete");
@@ -90,7 +93,9 @@ pub async fn run_tick(
         let bundle_ids = bundle_link.list_bundles_for_transaction(&tx.id).await?;
         match resp.status {
             RpcStatus::Success => {
-                tx_repo.set_status(&tx.id, TransactionStatus::Verified).await?;
+                tx_repo
+                    .set_status(&tx.id, TransactionStatus::Verified)
+                    .await?;
 
                 // One verifier.bundle_completed event for the whole tx batch,
                 // then a kind-specific bundle.{deposit,withdraw}_completed event
@@ -115,11 +120,8 @@ pub async fn run_tick(
                     let Some(bundle) = bundle_repo.find_by_id(bid).await? else {
                         continue;
                     };
-                    let summary = match summarize_bundle(
-                        &bundle.operations_mlxdr,
-                        cheap,
-                        expensive,
-                    ) {
+                    let summary = match summarize_bundle(&bundle.operations_mlxdr, cheap, expensive)
+                    {
                         Ok(s) => s,
                         Err(e) => {
                             warn!(bundle = %bid, error = %e, "verifier: summarize failed");
@@ -157,7 +159,9 @@ pub async fn run_tick(
                 }
             }
             RpcStatus::Failed => {
-                tx_repo.set_status(&tx.id, TransactionStatus::Failed).await?;
+                tx_repo
+                    .set_status(&tx.id, TransactionStatus::Failed)
+                    .await?;
                 for bid in &bundle_ids {
                     bundle_repo
                         .mark_failed(bid, "tx failed on chain", None)

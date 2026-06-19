@@ -5,8 +5,8 @@
 //!   needing a live DATABASE_URL at build time).
 //! - Soft-delete aware: read queries filter `deleted_at IS NULL`.
 
-use crate::models::*;
 use crate::db::PgPool;
+use crate::models::*;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use serde_json::Value as JsonValue;
@@ -338,7 +338,11 @@ impl OperationsBundleRepo {
         Ok(row)
     }
 
-    pub async fn list_by_status(&self, status: BundleStatus, limit: i64) -> Result<Vec<OperationsBundle>> {
+    pub async fn list_by_status(
+        &self,
+        status: BundleStatus,
+        limit: i64,
+    ) -> Result<Vec<OperationsBundle>> {
         let rows = sqlx::query_as::<_, OperationsBundle>(
             r#"SELECT id, status, channel_contract_id, ttl, operations_mlxdr, fee, retry_count, last_failure_reason, failure_detail, created_at, updated_at, created_by, updated_by, deleted_at
                FROM operations_bundles WHERE status = $1 AND deleted_at IS NULL ORDER BY created_at DESC LIMIT $2"#,
@@ -352,10 +356,7 @@ impl OperationsBundleRepo {
 
     /// Recent bundles for the operator dashboard's Operations table, with
     /// submitter identity inlined for one-shot rendering.
-    pub async fn list_recent_with_entity(
-        &self,
-        limit: i64,
-    ) -> Result<Vec<RecentBundleRow>> {
+    pub async fn list_recent_with_entity(&self, limit: i64) -> Result<Vec<RecentBundleRow>> {
         let rows = sqlx::query_as::<_, RecentBundleRow>(
             r#"SELECT b.id, b.status, b.channel_contract_id, b.created_at, b.updated_at,
                       e.name AS entity_name, e.jurisdictions AS entity_jurisdictions
@@ -372,15 +373,22 @@ impl OperationsBundleRepo {
     }
 
     pub async fn set_status(&self, id: &str, status: BundleStatus) -> Result<()> {
-        sqlx::query(r#"UPDATE operations_bundles SET status = $2, updated_at = now() WHERE id = $1"#)
-            .bind(id)
-            .bind(status)
-            .execute(&self.pool)
-            .await?;
+        sqlx::query(
+            r#"UPDATE operations_bundles SET status = $2, updated_at = now() WHERE id = $1"#,
+        )
+        .bind(id)
+        .bind(status)
+        .execute(&self.pool)
+        .await?;
         Ok(())
     }
 
-    pub async fn mark_failed(&self, id: &str, reason: &str, detail: Option<&JsonValue>) -> Result<()> {
+    pub async fn mark_failed(
+        &self,
+        id: &str,
+        reason: &str,
+        detail: Option<&JsonValue>,
+    ) -> Result<()> {
         sqlx::query(
             r#"UPDATE operations_bundles
                SET status = 'FAILED'::bundle_status, last_failure_reason = $2, failure_detail = $3,
@@ -482,18 +490,20 @@ impl BundleTransactionRepo {
     }
 
     pub async fn list_transactions_for_bundle(&self, bundle_id: &str) -> Result<Vec<String>> {
-        let rows = sqlx::query(r#"SELECT transaction_id FROM bundles_transactions WHERE bundle_id = $1"#)
-            .bind(bundle_id)
-            .fetch_all(&self.pool)
-            .await?;
+        let rows =
+            sqlx::query(r#"SELECT transaction_id FROM bundles_transactions WHERE bundle_id = $1"#)
+                .bind(bundle_id)
+                .fetch_all(&self.pool)
+                .await?;
         Ok(rows.into_iter().map(|r| r.get::<String, _>(0)).collect())
     }
 
     pub async fn list_bundles_for_transaction(&self, transaction_id: &str) -> Result<Vec<String>> {
-        let rows = sqlx::query(r#"SELECT bundle_id FROM bundles_transactions WHERE transaction_id = $1"#)
-            .bind(transaction_id)
-            .fetch_all(&self.pool)
-            .await?;
+        let rows =
+            sqlx::query(r#"SELECT bundle_id FROM bundles_transactions WHERE transaction_id = $1"#)
+                .bind(transaction_id)
+                .fetch_all(&self.pool)
+                .await?;
         Ok(rows.into_iter().map(|r| r.get::<String, _>(0)).collect())
     }
 }
@@ -642,7 +652,10 @@ impl CouncilMembershipRepo {
         Ok(())
     }
 
-    pub async fn find_by_channel_auth(&self, channel_auth_id: &str) -> Result<Option<CouncilMembership>> {
+    pub async fn find_by_channel_auth(
+        &self,
+        channel_auth_id: &str,
+    ) -> Result<Option<CouncilMembership>> {
         let row = sqlx::query_as::<_, CouncilMembership>(
             r#"SELECT id, council_url, council_name, council_public_key, channel_auth_id, status,
                       config_json, claimed_jurisdictions, join_request_id,
