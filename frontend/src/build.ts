@@ -73,6 +73,10 @@ const isProduction = Deno.args.includes("--production");
 const denoJson = JSON.parse(await Deno.readTextFile(DENO_JSON));
 const version = denoJson.version ?? "0.0.0";
 
+// public/ is a gitignored build artifact, so it won't exist on a fresh
+// checkout (CI, Docker). Create it before writing the bundle/assets into it.
+await Deno.mkdir(resolve(PROJECT_ROOT, "public"), { recursive: true });
+
 await writeHealthJson(version);
 
 await buildStyles();
