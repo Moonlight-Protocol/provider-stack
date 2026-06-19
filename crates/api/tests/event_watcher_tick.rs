@@ -11,6 +11,7 @@
 mod common;
 
 use common::TestDb;
+use provider_stack_core::events::EventBroadcaster;
 use provider_stack_core::pipelines::event_watcher::run_tick;
 use provider_stack_persistence::{CouncilMembershipRepo, CouncilMembershipStatus};
 use serde_json::{json, Value};
@@ -133,8 +134,9 @@ async fn provider_added_event_promotes_membership_to_active() {
 
     let server = Server::new(&rpc.uri(), Options { allow_http: true, ..Options::default() })
         .expect("Server::new");
+    let events = EventBroadcaster::new(256, "GTESTPP".to_string());
     let mut cursors = HashMap::new();
-    run_tick(&server, &db.pool, &mut cursors).await.expect("watcher tick");
+    run_tick(&server, &db.pool, &events, &mut cursors).await.expect("watcher tick");
 
     let status: String = sqlx::query_scalar(
         "SELECT status::text FROM council_memberships WHERE channel_auth_id = $1",
@@ -174,7 +176,8 @@ async fn provider_removed_event_marks_membership_rejected() {
 
     let server = Server::new(&rpc.uri(), Options { allow_http: true, ..Options::default() })
         .expect("Server::new");
-    run_tick(&server, &db.pool, &mut HashMap::new()).await.expect("watcher tick");
+    let events = EventBroadcaster::new(256, "GTESTPP".to_string());
+    run_tick(&server, &db.pool, &events, &mut HashMap::new()).await.expect("watcher tick");
 
     let status: String = sqlx::query_scalar(
         "SELECT status::text FROM council_memberships WHERE channel_auth_id = $1",
@@ -204,7 +207,8 @@ async fn empty_events_response_leaves_membership_unchanged() {
 
     let server = Server::new(&rpc.uri(), Options { allow_http: true, ..Options::default() })
         .expect("Server::new");
-    run_tick(&server, &db.pool, &mut HashMap::new()).await.expect("watcher tick");
+    let events = EventBroadcaster::new(256, "GTESTPP".to_string());
+    run_tick(&server, &db.pool, &events, &mut HashMap::new()).await.expect("watcher tick");
 
     let status: String = sqlx::query_scalar(
         "SELECT status::text FROM council_memberships WHERE channel_auth_id = $1",
