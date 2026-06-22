@@ -122,18 +122,19 @@ async fn sep10_full_roundtrip_issues_entity_jwt() {
         .as_str()
         .expect("data.challenge field")
         .to_string();
-    let net_passphrase = body["data"]["networkPassphrase"].as_str().unwrap().to_string();
+    let net_passphrase = body["data"]["networkPassphrase"]
+        .as_str()
+        .unwrap()
+        .to_string();
     assert_eq!(net_passphrase, passphrase_for(&state.config.network));
 
     // Sanity: envelope already carries the server signature.
     let mut envelope =
         TransactionEnvelope::from_xdr_base64(&envelope_b64, Limits::none()).expect("parse");
     match &envelope {
-        TransactionEnvelope::Tx(v1) => assert_eq!(
-            v1.signatures.len(),
-            1,
-            "server signature should be present"
-        ),
+        TransactionEnvelope::Tx(v1) => {
+            assert_eq!(v1.signatures.len(), 1, "server signature should be present")
+        }
         _ => panic!("expected V1 envelope"),
     }
 
@@ -146,7 +147,7 @@ async fn sep10_full_roundtrip_issues_entity_jwt() {
     // 3. POST back, expect JWT.
     let req = test::TestRequest::post()
         .uri("/api/v1/stellar/auth")
-        .set_json(serde_json::json!({ "transaction": signed_b64 }))
+        .set_json(serde_json::json!({ "signedChallenge": signed_b64 }))
         .to_request();
     let resp = test::call_service(&app, req).await;
     assert!(
@@ -155,7 +156,10 @@ async fn sep10_full_roundtrip_issues_entity_jwt() {
         resp.status()
     );
     let body: serde_json::Value = test::read_body_json(resp).await;
-    let token = body["data"]["token"].as_str().expect("data.token field").to_string();
+    let token = body["data"]["jwt"]
+        .as_str()
+        .expect("data.jwt field")
+        .to_string();
 
     // 4. Decode + assert claims.
     let claims = verify_token(&secret_for_jwt, &token).expect("verify_token");
@@ -176,8 +180,11 @@ async fn sep10_full_roundtrip_issues_entity_jwt() {
 async fn sep10_post_rejects_envelope_without_client_signature() {
     let pp_seed = [0xABu8; 32];
     let operator_seed = [0xCCu8; 32];
-    let operator_pubkey_strkey =
-        strkey(SigningKey::from_bytes(&operator_seed).verifying_key().to_bytes());
+    let operator_pubkey_strkey = strkey(
+        SigningKey::from_bytes(&operator_seed)
+            .verifying_key()
+            .to_bytes(),
+    );
     let state = make_test_state(pp_seed, operator_pubkey_strkey);
 
     let app = test::init_service(
@@ -188,7 +195,11 @@ async fn sep10_post_rejects_envelope_without_client_signature() {
     .await;
 
     let entity_seed = [0xEEu8; 32];
-    let entity_strkey = strkey(SigningKey::from_bytes(&entity_seed).verifying_key().to_bytes());
+    let entity_strkey = strkey(
+        SigningKey::from_bytes(&entity_seed)
+            .verifying_key()
+            .to_bytes(),
+    );
 
     let req = test::TestRequest::get()
         .uri(&format!("/api/v1/stellar/auth?account={entity_strkey}"))
@@ -199,8 +210,13 @@ async fn sep10_post_rejects_envelope_without_client_signature() {
     // Don't co-sign; just post it back as the entity, expect 401.
     let req = test::TestRequest::post()
         .uri("/api/v1/stellar/auth")
-        .set_json(serde_json::json!({ "transaction": envelope_b64 }))
+        .set_json(serde_json::json!({ "signedChallenge": envelope_b64 }))
         .to_request();
     let resp = test::call_service(&app, req).await;
-    assert_eq!(resp.status().as_u16(), 401, "expected 401, got {}", resp.status());
+    assert_eq!(
+        resp.status().as_u16(),
+        401,
+        "expected 401, got {}",
+        resp.status()
+    );
 }

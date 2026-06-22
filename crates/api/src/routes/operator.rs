@@ -31,8 +31,16 @@ macro_rules! stub_get {
     };
 }
 
-stub_get!(get_channels,       "/provider/channels",       serde_json::json!({ "channels": [] }));
-stub_get!(get_mempool,        "/provider/mempool",        serde_json::json!({ "slots": [] }));
+stub_get!(
+    get_channels,
+    "/provider/channels",
+    serde_json::json!({ "channels": [] })
+);
+stub_get!(
+    get_mempool,
+    "/provider/mempool",
+    serde_json::json!({ "slots": [] })
+);
 stub_get!(
     get_treasury,
     "/provider/treasury",
@@ -43,9 +51,21 @@ stub_get!(
         "lastModifiedLedger": 0
     })
 );
-stub_get!(get_utxos,          "/provider/utxos",          serde_json::json!({ "utxos": [] }));
-stub_get!(get_transactions,   "/provider/transactions",   serde_json::json!({ "transactions": [] }));
-stub_get!(get_audit_export,   "/provider/audit-export",   serde_json::json!({ "entries": [] }));
+stub_get!(
+    get_utxos,
+    "/provider/utxos",
+    serde_json::json!({ "utxos": [] })
+);
+stub_get!(
+    get_transactions,
+    "/provider/transactions",
+    serde_json::json!({ "transactions": [] })
+);
+stub_get!(
+    get_audit_export,
+    "/provider/audit-export",
+    serde_json::json!({ "entries": [] })
+);
 
 #[derive(Deserialize)]
 pub struct MetricsQuery {
@@ -157,9 +177,7 @@ fn bundle_status_to_string(s: BundleStatus) -> String {
 /// Mirrors `events.rs::summarize_bundle` — deposit wins over withdraw wins
 /// over create (send). i128 totals are stringified so JSON can carry them
 /// past JS's 2^53 limit.
-fn primary_amount_and_kind(
-    operations_mlxdr: &JsonValue,
-) -> (Option<String>, &'static str) {
+fn primary_amount_and_kind(operations_mlxdr: &JsonValue) -> (Option<String>, &'static str) {
     let Ok((classified, _)) = classify_bundle(operations_mlxdr) else {
         return (None, "unknown");
     };
@@ -263,8 +281,12 @@ pub async fn get_bundle(
     let (operations, amount) = match classify_bundle(&bundle.operations_mlxdr) {
         Ok((classified, _)) => {
             let mut ops = Vec::new();
-            for o in classified.deposit.iter().chain(classified.withdraw.iter())
-                .chain(classified.create.iter()).chain(classified.spend.iter())
+            for o in classified
+                .deposit
+                .iter()
+                .chain(classified.withdraw.iter())
+                .chain(classified.create.iter())
+                .chain(classified.spend.iter())
             {
                 ops.push(BundleOp {
                     kind: op_kind_str(o.kind),

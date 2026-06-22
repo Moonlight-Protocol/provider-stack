@@ -60,7 +60,10 @@ pub async fn run(config: Arc<Config>, pool: PgPool, events: EventBroadcaster) {
         drop(guard);
 
         let tick_span = tracing::info_span!("Executor.tick");
-        if let Err(e) = run_tick(&server, &pool, &config, &events).instrument(tick_span).await {
+        if let Err(e) = run_tick(&server, &pool, &config, &events)
+            .instrument(tick_span)
+            .await
+        {
             warn!(error = %e, "executor tick failed");
         }
         debug!("executor tick complete");
@@ -87,15 +90,29 @@ pub async fn run_tick(
     let passphrase = network_passphrase_for(&config.network);
 
     let processing = bundles
-        .list_by_status(BundleStatus::Processing, config.mempool.slot_capacity as i64)
+        .list_by_status(
+            BundleStatus::Processing,
+            config.mempool.slot_capacity as i64,
+        )
         .await?;
+
+    let ctx = SubmitCtx {
+        server,
+        kp: &kp,
+        pubkey: &pubkey,
+        passphrase,
+        txs: &txs,
+        link: &link,
+        config,
+        events,
+    };
 
     for bundle in processing {
         let existing = link.list_transactions_for_bundle(&bundle.id).await?;
         if !existing.is_empty() {
             continue;
         }
-        if let Err(e) = submit_one(server, &kp, &pubkey, passphrase, &bundle, &txs, &link, config, events).await {
+        if let Err(e) = submit_one(&ctx, &bundle).await {
             warn!(bundle = %bundle.id, error = %e, "executor: bundle submission failed");
             bundles
                 .mark_failed(&bundle.id, &format!("submission failed: {e}"), None)
@@ -105,17 +122,33 @@ pub async fn run_tick(
     Ok(())
 }
 
+/// The ambient dependencies a single `submit_one` call needs, grouped so the
+/// function takes the per-bundle item plus one context rather than 9 args.
+struct SubmitCtx<'a> {
+    server: &'a Server,
+    kp: &'a Keypair,
+    pubkey: &'a str,
+    passphrase: &'a str,
+    txs: &'a TransactionRepo,
+    link: &'a BundleTransactionRepo,
+    config: &'a Config,
+    events: &'a EventBroadcaster,
+}
+
 async fn submit_one(
-    server: &Server,
-    kp: &Keypair,
-    pubkey: &str,
-    passphrase: &str,
+    ctx: &SubmitCtx<'_>,
     bundle: &provider_stack_persistence::OperationsBundle,
-    txs: &TransactionRepo,
-    link: &BundleTransactionRepo,
-    config: &Config,
-    events: &EventBroadcaster,
 ) -> anyhow::Result<()> {
+    let &SubmitCtx {
+        server,
+        kp,
+        pubkey,
+        passphrase,
+        txs,
+        link,
+        config,
+        events,
+    } = ctx;
     let contract_id = bundle
         .channel_contract_id
         .as_deref()
@@ -164,8 +197,8 @@ async fn submit_one(
     let user_spends = mlxdr::extract_user_spend_signatures(&slot_refs)
         .map_err(|e| anyhow::anyhow!("MLXDR spend-sig extract: {e}"))?;
 
-    let contract = Contracts::new(contract_id)
-        .map_err(|e| anyhow::anyhow!("Contracts::new failed: {e:?}"))?;
+    let contract =
+        Contracts::new(contract_id).map_err(|e| anyhow::anyhow!("Contracts::new failed: {e:?}"))?;
     let op = contract.call("transact", Some(vec![channel_op]));
 
     let mut builder = TransactionBuilder::new(&mut account, passphrase, None);
@@ -233,17 +266,18 @@ async fn submit_one(
         &user_spends,
     )?;
 
-    assembled.sign(&[kp.clone()]);
+    assembled.sign(std::slice::from_ref(kp));
 
     let response = server
         .send_transaction(assembled)
         .await
         .map_err(|e| anyhow::anyhow!("send_transaction failed: {e:?}"))?;
 
-    let timeout =
-        chrono::Utc::now() + ChronoDuration::seconds(config.transaction_expiration_offset as i64 * 5);
+    let timeout = chrono::Utc::now()
+        + ChronoDuration::seconds(config.transaction_expiration_offset as i64 * 5);
     let latest_ledger_seq = response.latest_ledger.to_string();
-    txs.create(&response.hash, timeout, &latest_ledger_seq).await?;
+    txs.create(&response.hash, timeout, &latest_ledger_seq)
+        .await?;
     link.link(&bundle.id, &response.hash).await?;
 
     events.send(ProviderEvent::executor_transaction_submitted(
@@ -273,8 +307,10 @@ fn set_auth_signature_expiration(
         return Ok(());
     };
     for op in ops.iter_mut() {
-        let OperationBody::InvokeHostFunction(InvokeHostFunctionOp { host_function, auth }) =
-            op.body.clone()
+        let OperationBody::InvokeHostFunction(InvokeHostFunctionOp {
+            host_function,
+            auth,
+        }) = op.body.clone()
         else {
             continue;
         };
@@ -286,8 +322,8 @@ fn set_auth_signature_expiration(
                 }
             }
         }
-        let new_auth: VecM<SorobanAuthorizationEntry> = VecM::try_from(entries)
-            .map_err(|e| anyhow::anyhow!("auth VecM: {e}"))?;
+        let new_auth: VecM<SorobanAuthorizationEntry> =
+            VecM::try_from(entries).map_err(|e| anyhow::anyhow!("auth VecM: {e}"))?;
         op.body = OperationBody::InvokeHostFunction(InvokeHostFunctionOp {
             host_function,
             auth: new_auth,
@@ -374,8 +410,10 @@ fn splice_user_signed_entries(
         return Ok(());
     };
     for op in ops.iter_mut() {
-        let OperationBody::InvokeHostFunction(InvokeHostFunctionOp { host_function, auth }) =
-            op.body.clone()
+        let OperationBody::InvokeHostFunction(InvokeHostFunctionOp {
+            host_function,
+            auth,
+        }) = op.body.clone()
         else {
             continue;
         };
@@ -384,9 +422,9 @@ fn splice_user_signed_entries(
         for entry in sim_entries.into_iter() {
             let account_pk_opt: Option<[u8; 32]> = match &entry.credentials {
                 SorobanCredentials::Address(addr) => match &addr.address {
-                    ScAddress::Account(AccountId(PublicKey::PublicKeyTypeEd25519(Uint256(
-                        pk,
-                    )))) => Some(*pk),
+                    ScAddress::Account(AccountId(PublicKey::PublicKeyTypeEd25519(Uint256(pk)))) => {
+                        Some(*pk)
+                    }
                     _ => None,
                 },
                 _ => None,
@@ -401,8 +439,8 @@ fn splice_user_signed_entries(
             }
             new_entries.push(entry);
         }
-        let new_auth: VecM<SorobanAuthorizationEntry> = VecM::try_from(new_entries)
-            .map_err(|e| anyhow::anyhow!("auth VecM: {e}"))?;
+        let new_auth: VecM<SorobanAuthorizationEntry> =
+            VecM::try_from(new_entries).map_err(|e| anyhow::anyhow!("auth VecM: {e}"))?;
         op.body = OperationBody::InvokeHostFunction(InvokeHostFunctionOp {
             host_function,
             auth: new_auth,
@@ -440,8 +478,10 @@ fn sign_soroban_auth_entries(
         return Ok(());
     };
     for op in ops.iter_mut() {
-        let OperationBody::InvokeHostFunction(InvokeHostFunctionOp { host_function, auth }) =
-            op.body.clone()
+        let OperationBody::InvokeHostFunction(InvokeHostFunctionOp {
+            host_function,
+            auth,
+        }) = op.body.clone()
         else {
             continue;
         };
@@ -455,14 +495,13 @@ fn sign_soroban_auth_entries(
                     signed_entries.push(entry);
                     continue;
                 }
-                let preimage = HashIdPreimage::SorobanAuthorization(
-                    HashIdPreimageSorobanAuthorization {
+                let preimage =
+                    HashIdPreimage::SorobanAuthorization(HashIdPreimageSorobanAuthorization {
                         network_id: network_id.clone(),
                         nonce: addr.nonce,
                         signature_expiration_ledger: addr.signature_expiration_ledger,
                         invocation: entry.root_invocation.clone(),
-                    },
-                );
+                    });
                 let preimage_xdr = preimage
                     .to_xdr(Limits::none())
                     .map_err(|e| anyhow::anyhow!("preimage XDR: {e}"))?;
@@ -485,11 +524,10 @@ fn sign_soroban_auth_entries(
                     .map_err(|e| anyhow::anyhow!("signer vec: {e}"))?,
                 )));
                 // Signature::Ed25519(BytesN<64>) → ScVal::Vec([Symbol("Ed25519"), Bytes(sig_64)])
-                let sig_bytes: soroban_client::xdr::BytesM = sig
-                    .to_bytes()
-                    .to_vec()
-                    .try_into()
-                    .map_err(|e: soroban_client::xdr::Error| anyhow::anyhow!("sig bytes: {e}"))?;
+                let sig_bytes: soroban_client::xdr::BytesM =
+                    sig.to_bytes().to_vec().try_into().map_err(
+                        |e: soroban_client::xdr::Error| anyhow::anyhow!("sig bytes: {e}"),
+                    )?;
                 let sig_ed25519 = ScVal::Vec(Some(ScVec(
                     VecM::try_from(vec![
                         ScVal::Symbol(ScSymbol(
@@ -502,26 +540,27 @@ fn sign_soroban_auth_entries(
                 )));
                 // (Signature, u32) → ScVal::Vec([sig, U32])
                 let provider_sig_tuple = ScVal::Vec(Some(ScVec(
-                    VecM::try_from(vec![sig_ed25519, ScVal::U32(addr.signature_expiration_ledger)])
-                        .map_err(|e| anyhow::anyhow!("sig tuple: {e}"))?,
+                    VecM::try_from(vec![
+                        sig_ed25519,
+                        ScVal::U32(addr.signature_expiration_ledger),
+                    ])
+                    .map_err(|e| anyhow::anyhow!("sig tuple: {e}"))?,
                 )));
 
                 // For Spend operations, fold the user-pre-signed P256 entries into
                 // the same map. Sort by UTXO key bytes so the Soroban host's
                 // map-ordering invariant holds (mirrors moonlight-sdk's
                 // orderedSpendSigners at signatures-xdr.ts:22).
-                let mut sorted_spends: Vec<&mlxdr::UserSpendSignature> = user_spends.iter().collect();
-                sorted_spends.sort_by(|a, b| a.utxo_pk65.cmp(&b.utxo_pk65));
+                let mut sorted_spends: Vec<&mlxdr::UserSpendSignature> =
+                    user_spends.iter().collect();
+                sorted_spends.sort_by_key(|s| s.utxo_pk65);
 
                 let mut map_entries: Vec<ScMapEntry> = Vec::new();
                 for spend in &sorted_spends {
-                    let utxo_bytes: soroban_client::xdr::BytesM = spend
-                        .utxo_pk65
-                        .to_vec()
-                        .try_into()
-                        .map_err(|e: soroban_client::xdr::Error| {
-                            anyhow::anyhow!("p256 utxo bytes: {e}")
-                        })?;
+                    let utxo_bytes: soroban_client::xdr::BytesM =
+                        spend.utxo_pk65.to_vec().try_into().map_err(
+                            |e: soroban_client::xdr::Error| anyhow::anyhow!("p256 utxo bytes: {e}"),
+                        )?;
                     let signer_p256 = ScVal::Vec(Some(ScVec(
                         VecM::try_from(vec![
                             ScVal::Symbol(ScSymbol(
@@ -532,13 +571,10 @@ fn sign_soroban_auth_entries(
                         ])
                         .map_err(|e| anyhow::anyhow!("p256 signer vec: {e}"))?,
                     )));
-                    let p256_sig_bytes: soroban_client::xdr::BytesM = spend
-                        .sig
-                        .to_vec()
-                        .try_into()
-                        .map_err(|e: soroban_client::xdr::Error| {
-                            anyhow::anyhow!("p256 sig bytes: {e}")
-                        })?;
+                    let p256_sig_bytes: soroban_client::xdr::BytesM =
+                        spend.sig.to_vec().try_into().map_err(
+                            |e: soroban_client::xdr::Error| anyhow::anyhow!("p256 sig bytes: {e}"),
+                        )?;
                     let p256_sig_variant = ScVal::Vec(Some(ScVec(
                         VecM::try_from(vec![
                             ScVal::Symbol(ScSymbol(
@@ -570,8 +606,7 @@ fn sign_soroban_auth_entries(
                 // field, so a single-element vec wrapping the inner Map. Matches
                 // moonlight-sdk's buildSignaturesXDR wire format.
                 let inner_map = ScVal::Map(Some(ScMap(
-                    VecM::try_from(map_entries)
-                        .map_err(|e| anyhow::anyhow!("sig map: {e}"))?,
+                    VecM::try_from(map_entries).map_err(|e| anyhow::anyhow!("sig map: {e}"))?,
                 )));
                 let signatures_scval = ScVal::Vec(Some(ScVec(
                     VecM::try_from(vec![inner_map])
@@ -581,8 +616,8 @@ fn sign_soroban_auth_entries(
             }
             signed_entries.push(entry);
         }
-        let new_auth: VecM<SorobanAuthorizationEntry> = VecM::try_from(signed_entries)
-            .map_err(|e| anyhow::anyhow!("auth VecM: {e}"))?;
+        let new_auth: VecM<SorobanAuthorizationEntry> =
+            VecM::try_from(signed_entries).map_err(|e| anyhow::anyhow!("auth VecM: {e}"))?;
         op.body = OperationBody::InvokeHostFunction(InvokeHostFunctionOp {
             host_function: host_function.clone(),
             auth: new_auth,

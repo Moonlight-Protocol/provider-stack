@@ -107,7 +107,10 @@ pub async fn post_discover(
     Ok(HttpResponse::Ok().json(Data::new(DiscoverPayload {
         council_url: base_url,
         council: data.get("council").cloned().unwrap_or(JsonValue::Null),
-        jurisdictions: data.get("jurisdictions").cloned().unwrap_or(JsonValue::Null),
+        jurisdictions: data
+            .get("jurisdictions")
+            .cloned()
+            .unwrap_or(JsonValue::Null),
         channels: data.get("channels").cloned().unwrap_or(JsonValue::Null),
         providers: data.get("providers").cloned().unwrap_or(JsonValue::Null),
     })))
@@ -167,13 +170,17 @@ pub async fn post_join(
             JsonValue::String(state.config.provider_base_url.clone()),
         );
         if let Some(ref label) = req.label {
-            map.entry("label").or_insert_with(|| JsonValue::String(label.clone()));
+            map.entry("label")
+                .or_insert_with(|| JsonValue::String(label.clone()));
         }
         if let Some(ref ce) = req.contact_email {
-            map.entry("contactEmail").or_insert_with(|| JsonValue::String(ce.clone()));
+            map.entry("contactEmail")
+                .or_insert_with(|| JsonValue::String(ce.clone()));
         }
     } else {
-        return Err(ApiError::BadRequest("signedEnvelope must be a JSON object".into()));
+        return Err(ApiError::BadRequest(
+            "signedEnvelope must be a JSON object".into(),
+        ));
     }
 
     let client = reqwest::Client::builder()
@@ -293,9 +300,8 @@ pub async fn post_membership(
     //   GET /api/v1/public/provider/membership-status?councilId=…&publicKey=…
     //   200 → "ACTIVE", 202 → "PENDING", 404 → "NOT_FOUND" (rejected)
     // The PP we ask about is this stack's env-pinned operator key.
-    let signing = provider_stack_core::auth::sep10::signing_key_from_seed(
-        &state.config.pp_secret_key,
-    )?;
+    let signing =
+        provider_stack_core::auth::sep10::signing_key_from_seed(&state.config.pp_secret_key)?;
     let pp_pubkey = format!(
         "{}",
         stellar_strkey::ed25519::PublicKey(signing.verifying_key().to_bytes())
@@ -322,7 +328,8 @@ pub async fn post_membership(
         // or its request was rejected). Demote local row to REJECTED.
         if http_status.as_u16() == 404 {
             if m.status != CouncilMembershipStatus::Rejected {
-                repo.set_status(&m.channel_auth_id, CouncilMembershipStatus::Rejected).await?;
+                repo.set_status(&m.channel_auth_id, CouncilMembershipStatus::Rejected)
+                    .await?;
                 updated += 1;
             }
             continue;
@@ -374,7 +381,12 @@ fn base_origin(parsed: &Url) -> String {
         .port_or_known_default()
         .map(|p| format!(":{p}"))
         .unwrap_or_default();
-    format!("{}://{}{}", parsed.scheme(), parsed.host_str().unwrap_or(""), port)
+    format!(
+        "{}://{}{}",
+        parsed.scheme(),
+        parsed.host_str().unwrap_or(""),
+        port
+    )
 }
 
 fn enforce_url_safety(parsed: &Url, mode: &str) -> Result<(), ApiError> {

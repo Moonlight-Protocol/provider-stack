@@ -66,11 +66,12 @@ impl NonceStore {
     pub fn consume(&self, nonce: &str, expected_public_key: &str) -> bool {
         let mut guard = self.inner.lock().unwrap();
         self.gc(&mut guard);
-        match guard.remove(nonce) {
-            Some(entry) if entry.public_key == expected_public_key
-                && entry.created_at.elapsed() < self.ttl => true,
-            _ => false,
-        }
+        matches!(
+            guard.remove(nonce),
+            Some(entry)
+                if entry.public_key == expected_public_key
+                    && entry.created_at.elapsed() < self.ttl
+        )
     }
 
     fn gc(&self, guard: &mut std::sync::MutexGuard<HashMap<String, NonceEntry>>) {
@@ -102,15 +103,14 @@ pub fn verify_signature(
     let pk_bytes = stellar_strkey::ed25519::PublicKey::from_string(public_key_strkey)
         .map_err(|e| CoreError::Strkey(e.to_string()))?
         .0;
-    let verifying_key = VerifyingKey::from_bytes(&pk_bytes)
-        .map_err(|e| CoreError::Strkey(e.to_string()))?;
+    let verifying_key =
+        VerifyingKey::from_bytes(&pk_bytes).map_err(|e| CoreError::Strkey(e.to_string()))?;
 
-    let sig_bytes = if !signature.is_empty()
-        && signature.chars().all(|c| c.is_ascii_hexdigit())
-    {
+    let sig_bytes = if !signature.is_empty() && signature.chars().all(|c| c.is_ascii_hexdigit()) {
         hex::decode(signature).map_err(|_| CoreError::InvalidSignature)?
     } else {
-        B64.decode(signature).map_err(|_| CoreError::InvalidSignature)?
+        B64.decode(signature)
+            .map_err(|_| CoreError::InvalidSignature)?
     };
     let sig = Signature::from_slice(&sig_bytes).map_err(|_| CoreError::InvalidSignature)?;
 

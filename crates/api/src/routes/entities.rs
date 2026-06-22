@@ -7,12 +7,14 @@
 
 use crate::envelope::Data;
 use crate::error::ApiError;
-use crate::state::AppState;
 use crate::middleware_auth::OperatorAuth;
+use crate::state::AppState;
 use actix_web::{get, post, web, HttpResponse, Responder};
 use chrono::{DateTime, Utc};
 use provider_stack_core::auth::sep43;
-use provider_stack_persistence::{AccountRepo, AccountType, EntityRepo, EntityStatus, WalletUserRepo};
+use provider_stack_persistence::{
+    AccountRepo, AccountType, EntityRepo, EntityStatus, WalletUserRepo,
+};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -65,10 +67,17 @@ pub async fn post_register(
     state: web::Data<AppState>,
     body: web::Json<RegisterReq>,
 ) -> Result<impl Responder, ApiError> {
-    sep43::verify_signature(&body.pubkey, &body.signed_challenge.nonce, &body.signed_challenge.signature)
-        .map_err(|_| ApiError::Unauthorized)?;
+    sep43::verify_signature(
+        &body.pubkey,
+        &body.signed_challenge.nonce,
+        &body.signed_challenge.signature,
+    )
+    .map_err(|_| ApiError::Unauthorized)?;
 
-    if !state.nonces.consume(&body.signed_challenge.nonce, &body.pubkey) {
+    if !state
+        .nonces
+        .consume(&body.signed_challenge.nonce, &body.pubkey)
+    {
         return Err(ApiError::Unauthorized);
     }
 
@@ -92,7 +101,10 @@ pub async fn post_register(
                     body.jurisdictions.as_deref(),
                 )
                 .await?;
-            entities.find_by_id(&entity_id).await?.expect("just updated")
+            entities
+                .find_by_id(&entity_id)
+                .await?
+                .expect("just updated")
         }
         None => {
             entities
@@ -108,7 +120,10 @@ pub async fn post_register(
     };
 
     let existing_accounts = accounts.list_by_entity(&entity.id).await?;
-    if !existing_accounts.iter().any(|a| a.account_type == AccountType::User) {
+    if !existing_accounts
+        .iter()
+        .any(|a| a.account_type == AccountType::User)
+    {
         let account_id = Uuid::new_v4().to_string();
         accounts
             .create(&account_id, AccountType::User, &entity.id, Some(&entity.id))

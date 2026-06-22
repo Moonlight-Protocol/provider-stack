@@ -4,6 +4,10 @@
 //! Requires `DATABASE_URL` pointing at a reachable Postgres with CREATEDB. If unset, callers
 //! should `eprintln + skip` — this module is meant for local + CI use, not unit isolation.
 
+// Shared across many test binaries, each of which uses only a subset of these
+// helpers — so some are legitimately unused per-binary.
+#![allow(dead_code)]
+
 use ed25519_dalek::SigningKey;
 use provider_stack_api::state::AppState;
 use provider_stack_core::{
@@ -26,8 +30,8 @@ pub struct TestDb {
 
 impl TestDb {
     pub async fn create() -> Self {
-        let admin_url = std::env::var("DATABASE_URL")
-            .expect("DATABASE_URL must be set for integration tests");
+        let admin_url =
+            std::env::var("DATABASE_URL").expect("DATABASE_URL must be set for integration tests");
         let name = format!("test_{}", Uuid::new_v4().simple());
 
         // Connect to the admin DB and CREATE DATABASE.
@@ -45,7 +49,9 @@ impl TestDb {
 
         let url = make_db_url(&admin_url, &name);
         let pool = connect(&url).await.expect("connect test db");
-        run_migrations(&pool).await.expect("run migrations on test db");
+        run_migrations(&pool)
+            .await
+            .expect("run migrations on test db");
 
         TestDb {
             url,
@@ -79,10 +85,7 @@ pub fn build_test_app_state(
     pool: PgPool,
     service_domain: &str,
 ) -> AppState {
-    let pp_secret = format!(
-        "{}",
-        stellar_strkey::ed25519::PrivateKey(pp_seed)
-    );
+    let pp_secret = format!("{}", stellar_strkey::ed25519::PrivateKey(pp_seed));
 
     let config = Arc::new(Config {
         port: 0,

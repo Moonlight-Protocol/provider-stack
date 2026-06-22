@@ -42,7 +42,9 @@ fn operator_jwt(state: &provider_stack_api::state::AppState) -> String {
 
 #[actix_web::test]
 async fn discover_relays_council_payload() {
-    let Some(db) = skip_if_no_db().await else { return; };
+    let Some(db) = skip_if_no_db().await else {
+        return;
+    };
     let council = MockServer::start().await;
 
     Mock::given(method("GET"))
@@ -80,7 +82,11 @@ async fn discover_relays_council_payload() {
         .set_json(json!({ "councilUrl": format!("{}?council=CABC123", council.uri()) }))
         .to_request();
     let resp = test::call_service(&app, req).await;
-    assert!(resp.status().is_success(), "discover returned {}", resp.status());
+    assert!(
+        resp.status().is_success(),
+        "discover returned {}",
+        resp.status()
+    );
 
     let body: serde_json::Value = test::read_body_json(resp).await;
     assert_eq!(body["data"]["council"]["channelAuthId"], "CABC123");
@@ -91,7 +97,9 @@ async fn discover_relays_council_payload() {
 
 #[actix_web::test]
 async fn discover_rejects_council_id_mismatch() {
-    let Some(db) = skip_if_no_db().await else { return; };
+    let Some(db) = skip_if_no_db().await else {
+        return;
+    };
     let council = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/api/v1/public/council"))
@@ -118,14 +126,21 @@ async fn discover_rejects_council_id_mismatch() {
         .set_json(json!({ "councilUrl": format!("{}?council=CABC123", council.uri()) }))
         .to_request();
     let resp = test::call_service(&app, req).await;
-    assert_eq!(resp.status().as_u16(), 400, "expected 400, got {}", resp.status());
+    assert_eq!(
+        resp.status().as_u16(),
+        400,
+        "expected 400, got {}",
+        resp.status()
+    );
 
     db.cleanup().await;
 }
 
 #[actix_web::test]
 async fn join_relays_envelope_and_creates_pending_membership() {
-    let Some(db) = skip_if_no_db().await else { return; };
+    let Some(db) = skip_if_no_db().await else {
+        return;
+    };
     let council = MockServer::start().await;
 
     Mock::given(method("POST"))
@@ -150,7 +165,7 @@ async fn join_relays_envelope_and_creates_pending_membership() {
     .await;
 
     let req = test::TestRequest::post()
-        .uri(&format!("/api/v1/providers/{pp_pk}/council/join"))
+        .uri("/api/v1/provider/council/join")
         .insert_header(("Authorization", format!("Bearer {token}")))
         .set_json(json!({
             "councilUrl": format!("{}?council=CABC123", council.uri()),
@@ -165,7 +180,12 @@ async fn join_relays_envelope_and_creates_pending_membership() {
         }))
         .to_request();
     let resp = test::call_service(&app, req).await;
-    assert_eq!(resp.status().as_u16(), 201, "expected 201, got {}", resp.status());
+    assert_eq!(
+        resp.status().as_u16(),
+        201,
+        "expected 201, got {}",
+        resp.status()
+    );
 
     let body: serde_json::Value = test::read_body_json(resp).await;
     assert_eq!(body["data"]["status"], "PENDING");
@@ -183,7 +203,7 @@ async fn join_relays_envelope_and_creates_pending_membership() {
 
     // GET /council/membership returns it.
     let req = test::TestRequest::get()
-        .uri(&format!("/api/v1/providers/{pp_pk}/council/membership"))
+        .uri("/api/v1/provider/council/membership")
         .insert_header(("Authorization", format!("Bearer {token}")))
         .to_request();
     let body: serde_json::Value = test::call_and_read_body_json(&app, req).await;
@@ -196,11 +216,12 @@ async fn join_relays_envelope_and_creates_pending_membership() {
 
 #[actix_web::test]
 async fn join_requires_operator_jwt() {
-    let Some(db) = skip_if_no_db().await else { return; };
+    let Some(db) = skip_if_no_db().await else {
+        return;
+    };
 
     let pp_seed = [0xABu8; 32];
     let operator_strkey = pp_strkey([0xCCu8; 32]);
-    let pp_pk = pp_strkey(pp_seed);
     let state = build_test_app_state(pp_seed, operator_strkey, db.pool.clone(), SERVICE_DOMAIN);
 
     let app = test::init_service(
@@ -211,14 +232,19 @@ async fn join_requires_operator_jwt() {
     .await;
 
     let req = test::TestRequest::post()
-        .uri(&format!("/api/v1/providers/{pp_pk}/council/join"))
+        .uri("/api/v1/provider/council/join")
         .set_json(json!({
             "councilUrl": "http://example.com",
             "signedEnvelope": {}
         }))
         .to_request();
     let resp = test::call_service(&app, req).await;
-    assert_eq!(resp.status().as_u16(), 401, "expected 401 unauthorized, got {}", resp.status());
+    assert_eq!(
+        resp.status().as_u16(),
+        401,
+        "expected 401 unauthorized, got {}",
+        resp.status()
+    );
 
     db.cleanup().await;
 }
@@ -226,5 +252,9 @@ async fn join_requires_operator_jwt() {
 // Keep the unused `strkey` warning quiet — it'll be used as soon as more council tests grow.
 #[allow(dead_code)]
 fn _strkey_for_lints() {
-    let _ = strkey(SigningKey::from_bytes(&[0u8; 32]).verifying_key().to_bytes());
+    let _ = strkey(
+        SigningKey::from_bytes(&[0u8; 32])
+            .verifying_key()
+            .to_bytes(),
+    );
 }

@@ -5,7 +5,7 @@
 //! `updated_at - created_at`.
 
 use crate::config::Config;
-use provider_stack_persistence::{MempoolMetricRepo, PgPool};
+use provider_stack_persistence::{MempoolMetricRepo, MempoolMetricSnapshot, PgPool};
 use sqlx::Row;
 use std::sync::Arc;
 use std::time::Duration;
@@ -90,17 +90,17 @@ pub async fn snapshot(pool: &PgPool) -> anyhow::Result<()> {
     };
 
     let repo = MempoolMetricRepo::new(pool.clone());
-    repo.insert_snapshot(
-        PLATFORM_VERSION,
-        queue_depth as i32,
-        slot_count as i32,
-        bundles_completed as i32,
-        bundles_expired as i32,
-        bundles_failed as i32,
-        avg_ms,
-        p95_ms,
+    repo.insert_snapshot(&MempoolMetricSnapshot {
+        platform_version: PLATFORM_VERSION,
+        queue_depth: queue_depth as i32,
+        slot_count: slot_count as i32,
+        bundles_completed: bundles_completed as i32,
+        bundles_expired: bundles_expired as i32,
+        bundles_failed: bundles_failed as i32,
+        avg_processing_ms: avg_ms,
+        p95_processing_ms: p95_ms,
         throughput_per_min,
-    )
+    })
     .await?;
     Ok(())
 }

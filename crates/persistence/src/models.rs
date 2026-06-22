@@ -242,9 +242,16 @@ pub struct MempoolMetric {
     pub throughput_per_min: Option<f64>,
 }
 
-#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
-pub struct EventWatcherState {
-    pub key: String,
-    pub value: String,
-    pub updated_at: DateTime<Utc>,
+/// Insert payload for a `mempool_metrics` snapshot. Grouped so the repository's
+/// insert stays within the arg-count budget. `id` and `recorded_at` are DB-set.
+pub struct MempoolMetricSnapshot<'a> {
+    pub platform_version: &'a str,
+    pub queue_depth: i32,
+    pub slot_count: i32,
+    pub bundles_completed: i32,
+    pub bundles_expired: i32,
+    pub bundles_failed: i32,
+    pub avg_processing_ms: Option<f64>,
+    pub p95_processing_ms: Option<f64>,
+    pub throughput_per_min: Option<f64>,
 }

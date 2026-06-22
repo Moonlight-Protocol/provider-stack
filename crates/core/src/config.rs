@@ -48,14 +48,20 @@ impl Config {
             database_url: required("DATABASE_URL")?,
             network: required("NETWORK")?,
             network_fee: required("NETWORK_FEE")?.parse()?,
-            stellar_rpc_url: env::var("STELLAR_RPC_URL")
-                .unwrap_or_else(|_| default_rpc_for_network(env::var("NETWORK").unwrap_or_default().as_str()).to_string()),
-            transaction_expiration_offset: env_or("TRANSACTION_EXPIRATION_OFFSET", "1000")?.parse()?,
-            event_watcher_interval: Duration::from_millis(env_or("EVENT_WATCHER_INTERVAL_MS", "30000")?.parse()?),
+            stellar_rpc_url: env::var("STELLAR_RPC_URL").unwrap_or_else(|_| {
+                default_rpc_for_network(env::var("NETWORK").unwrap_or_default().as_str())
+                    .to_string()
+            }),
+            transaction_expiration_offset: env_or("TRANSACTION_EXPIRATION_OFFSET", "1000")?
+                .parse()?,
+            event_watcher_interval: Duration::from_millis(
+                env_or("EVENT_WATCHER_INTERVAL_MS", "30000")?.parse()?,
+            ),
             service_domain: required("SERVICE_DOMAIN")?,
             service_auth_secret: required("SERVICE_AUTH_SECRET")?,
-            provider_base_url: env::var("PROVIDER_BASE_URL")
-                .unwrap_or_else(|_| format!("http://localhost:{}", env_or("PORT", "3000").unwrap())),
+            provider_base_url: env::var("PROVIDER_BASE_URL").unwrap_or_else(|_| {
+                format!("http://localhost:{}", env_or("PORT", "3000").unwrap())
+            }),
             operator_public_key: required("OPERATOR_PUBLIC_KEY")?,
             pp_secret_key: required("PP_SECRET_KEY")?,
             challenge_ttl: Duration::from_secs(required("CHALLENGE_TTL")?.parse()?),
@@ -64,11 +70,19 @@ impl Config {
                 slot_capacity: required("MEMPOOL_SLOT_CAPACITY")?.parse()?,
                 expensive_op_weight: required("MEMPOOL_EXPENSIVE_OP_WEIGHT")?.parse()?,
                 cheap_op_weight: required("MEMPOOL_CHEAP_OP_WEIGHT")?.parse()?,
-                executor_interval: Duration::from_millis(required("MEMPOOL_EXECUTOR_INTERVAL_MS")?.parse()?),
-                verifier_interval: Duration::from_millis(required("MEMPOOL_VERIFIER_INTERVAL_MS")?.parse()?),
-                ttl_check_interval: Duration::from_millis(required("MEMPOOL_TTL_CHECK_INTERVAL_MS")?.parse()?),
+                executor_interval: Duration::from_millis(
+                    required("MEMPOOL_EXECUTOR_INTERVAL_MS")?.parse()?,
+                ),
+                verifier_interval: Duration::from_millis(
+                    required("MEMPOOL_VERIFIER_INTERVAL_MS")?.parse()?,
+                ),
+                ttl_check_interval: Duration::from_millis(
+                    required("MEMPOOL_TTL_CHECK_INTERVAL_MS")?.parse()?,
+                ),
                 max_retry_attempts: required("MEMPOOL_MAX_RETRY_ATTEMPTS")?.parse()?,
-                startup_max_bundle_age: Duration::from_millis(env_or("MEMPOOL_STARTUP_MAX_BUNDLE_AGE_MS", "0")?.parse()?),
+                startup_max_bundle_age: Duration::from_millis(
+                    env_or("MEMPOOL_STARTUP_MAX_BUNDLE_AGE_MS", "0")?.parse()?,
+                ),
             },
             bundle_max_operations: required("BUNDLE_MAX_OPERATIONS")?.parse()?,
             allowed_origins: env::var("ALLOWED_ORIGINS")

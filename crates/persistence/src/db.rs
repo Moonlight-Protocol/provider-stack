@@ -1,5 +1,5 @@
 use anyhow::Result;
-use sqlx::postgres::{PgPoolOptions, PgPool as InnerPool};
+use sqlx::postgres::{PgPool as InnerPool, PgPoolOptions};
 
 pub type PgPool = InnerPool;
 

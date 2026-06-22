@@ -9,9 +9,7 @@ use crate::mlxdr::{classify, OperationKind};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value as JsonValue};
-use soroban_client::xdr::{
-    AccountId, Limits, PublicKey, ReadXdr, ScAddress, ScVal, Uint256,
-};
+use soroban_client::xdr::{AccountId, Limits, PublicKey, ReadXdr, ScAddress, ScVal, Uint256};
 use tokio::sync::broadcast;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -30,6 +28,13 @@ pub struct ProviderEvent {
     pub payload: JsonValue,
 }
 
+/// The submitting entity's display identity, carried on `mempool.bundle_added`.
+/// Grouped so the event constructor stays within the arg-count budget.
+pub struct Submitter {
+    pub name: Option<String>,
+    pub jurisdictions: Vec<String>,
+}
+
 impl ProviderEvent {
     fn new(kind: &str, scope: EventScope, payload: JsonValue) -> Self {
         Self {
@@ -46,8 +51,7 @@ impl ProviderEvent {
         weight: u32,
         channel_contract_id: Option<&str>,
         new_slot: bool,
-        entity_name: Option<String>,
-        jurisdictions: Vec<String>,
+        submitter: Submitter,
         amount: Option<String>,
     ) -> Self {
         Self::new(
@@ -58,8 +62,8 @@ impl ProviderEvent {
                 "weight": weight,
                 "channelContractId": channel_contract_id,
                 "newSlot": new_slot,
-                "entityName": entity_name,
-                "jurisdictions": jurisdictions,
+                "entityName": submitter.name,
+                "jurisdictions": submitter.jurisdictions,
                 "amount": amount,
             }),
         )
@@ -99,10 +103,24 @@ impl ProviderEvent {
         )
     }
 
-    pub fn channel_provider_added(
+    pub fn verifier_bundle_failed(
         scope: EventScope,
-        channel_contract_id: &str,
+        tx_id: &str,
+        bundle_ids: &[String],
+        channel_contract_id: Option<&str>,
     ) -> Self {
+        Self::new(
+            "verifier.bundle_failed",
+            scope,
+            json!({
+                "txId": tx_id,
+                "bundleIds": bundle_ids,
+                "channelContractId": channel_contract_id,
+            }),
+        )
+    }
+
+    pub fn channel_provider_added(scope: EventScope, channel_contract_id: &str) -> Self {
         Self::new(
             "channel.provider_added",
             scope,
@@ -186,11 +204,7 @@ impl EventBroadcaster {
     }
 
     pub fn current_scope(&self) -> EventScope {
-        let label = self
-            .pp_label
-            .read()
-            .ok()
-            .and_then(|g| g.clone());
+        let label = self.pp_label.read().ok().and_then(|g| g.clone());
         EventScope {
             pp_public_key: self.pp_public_key.clone(),
             pp_label: label,
@@ -244,8 +258,7 @@ pub fn summarize_bundle(
     // Spend + Withdraw are EXPENSIVE, Create + Deposit are CHEAP.
     let expensive_count = classified.spend.len() + classified.withdraw.len();
     let cheap_count = classified.create.len() + classified.deposit.len();
-    let weight: u32 = expensive_count as u32 * expensive_weight
-        + cheap_count as u32 * cheap_weight;
+    let weight: u32 = expensive_count as u32 * expensive_weight + cheap_count as u32 * cheap_weight;
 
     let total_deposit: i128 = classified.deposit.iter().map(|o| o.amount).sum();
     let total_withdraw: i128 = classified.withdraw.iter().map(|o| o.amount).sum();

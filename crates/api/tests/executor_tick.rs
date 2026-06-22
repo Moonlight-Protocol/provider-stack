@@ -15,6 +15,7 @@ use common::TestDb;
 use ed25519_dalek::SigningKey;
 use provider_stack_core::{
     config::{Config, MempoolConfig},
+    events::EventBroadcaster,
     pipelines::executor::run_tick,
 };
 use provider_stack_persistence::{BundleStatus, OperationsBundleRepo};
@@ -27,8 +28,9 @@ use std::time::Duration as StdDuration;
 // internally uses v26 via stellar-baselib. To construct values that soroban-client will accept,
 // use the re-exports under soroban_client::xdr, NOT the top-level stellar_xdr crate.
 use soroban_client::xdr::{
-    AccountEntry, AccountEntryExt, AccountId, LedgerEntryData, LedgerKey, LedgerKeyAccount, Limits,
-    PublicKey, SequenceNumber, String32, StringM, Thresholds, Uint256, VecM, WriteXdr,
+    AccountEntry, AccountEntryExt, AccountId, LedgerEntryData, LedgerFootprint, LedgerKey,
+    LedgerKeyAccount, Limits, PublicKey, SequenceNumber, SorobanResources, SorobanTransactionData,
+    SorobanTransactionDataExt, String32, StringM, Thresholds, Uint256, VecM, WriteXdr,
 };
 use wiremock::matchers::{body_partial_json, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -49,14 +51,6 @@ fn pp_strkey_secret() -> String {
     format!("{}", stellar_strkey::ed25519::PrivateKey(pp_keypair_seed()))
 }
 
-fn pp_strkey_public() -> String {
-    let signing = SigningKey::from_bytes(&pp_keypair_seed());
-    format!(
-        "{}",
-        stellar_strkey::ed25519::PublicKey(signing.verifying_key().to_bytes())
-    )
-}
-
 /// Build a base64 LedgerEntryData::Account XDR for the PP account with a fixed seq num.
 fn account_entry_data_b64(pp_pubkey_bytes: [u8; 32], seq: i64) -> String {
     let entry = AccountEntry {
@@ -72,7 +66,8 @@ fn account_entry_data_b64(pp_pubkey_bytes: [u8; 32], seq: i64) -> String {
         ext: AccountEntryExt::V0,
     };
     let data = LedgerEntryData::Account(entry);
-    data.to_xdr_base64(Limits::none()).expect("encode account entry data")
+    data.to_xdr_base64(Limits::none())
+        .expect("encode account entry data")
 }
 
 fn ledger_entries_response(pp_pubkey_bytes: [u8; 32]) -> Value {
@@ -103,6 +98,47 @@ fn send_tx_response(hash: &str) -> Value {
             "latestLedger": 1234u32,
             "latestLedgerCloseTime": "1700000000"
         }
+    })
+}
+
+/// Minimal SorobanTransactionData (empty footprint, zero resources) — enough for
+/// `assemble_transaction` to attach soroban_data and proceed.
+fn soroban_tx_data_b64() -> String {
+    let data = SorobanTransactionData {
+        ext: SorobanTransactionDataExt::V0,
+        resources: SorobanResources {
+            footprint: LedgerFootprint {
+                read_only: VecM::default(),
+                read_write: VecM::default(),
+            },
+            instructions: 0,
+            disk_read_bytes: 0,
+            write_bytes: 0,
+        },
+        resource_fee: 100,
+    };
+    data.to_xdr_base64(Limits::none())
+        .expect("encode soroban tx data")
+}
+
+fn simulate_tx_response() -> Value {
+    json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+            "latestLedger": 1234u32,
+            "minResourceFee": "100",
+            "transactionData": soroban_tx_data_b64(),
+            "events": []
+        }
+    })
+}
+
+fn latest_ledger_response() -> Value {
+    json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": { "id": "ledgerhash", "sequence": 1234u32, "protocolVersion": 22u32 }
     })
 }
 
@@ -141,7 +177,9 @@ fn cfg(rpc_url: &str) -> Arc<Config> {
 
 #[actix_web::test]
 async fn processing_bundle_submitted_and_tx_row_recorded() {
-    let Some(db) = skip_if_no_db().await else { return; };
+    let Some(db) = skip_if_no_db().await else {
+        return;
+    };
 
     let rpc = MockServer::start().await;
     let pp_pubkey_bytes = SigningKey::from_bytes(&pp_keypair_seed())
@@ -151,14 +189,34 @@ async fn processing_bundle_submitted_and_tx_row_recorded() {
     Mock::given(method("POST"))
         .and(path("/"))
         .and(body_partial_json(json!({ "method": "getLedgerEntries" })))
-        .respond_with(ResponseTemplate::new(200).set_body_json(ledger_entries_response(pp_pubkey_bytes)))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(ledger_entries_response(pp_pubkey_bytes)),
+        )
         .mount(&rpc)
         .await;
 
     Mock::given(method("POST"))
         .and(path("/"))
         .and(body_partial_json(json!({ "method": "sendTransaction" })))
-        .respond_with(ResponseTemplate::new(200).set_body_json(send_tx_response("TX_HASH_FROM_RPC")))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(send_tx_response("TX_HASH_FROM_RPC")),
+        )
+        .mount(&rpc)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/"))
+        .and(body_partial_json(
+            json!({ "method": "simulateTransaction" }),
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(simulate_tx_response()))
+        .mount(&rpc)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/"))
+        .and(body_partial_json(json!({ "method": "getLatestLedger" })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(latest_ledger_response()))
         .mount(&rpc)
         .await;
 
@@ -185,9 +243,18 @@ async fn processing_bundle_submitted_and_tx_row_recorded() {
         .unwrap();
 
     let config = cfg(&rpc.uri());
-    let server =
-        Server::new(&rpc.uri(), Options { allow_http: true, ..Options::default() }).unwrap();
-    run_tick(&server, &db.pool, &config).await.expect("executor tick");
+    let server = Server::new(
+        &rpc.uri(),
+        Options {
+            allow_http: true,
+            ..Options::default()
+        },
+    )
+    .unwrap();
+    let events = EventBroadcaster::new(256, "GTESTPP".to_string());
+    run_tick(&server, &db.pool, &config, &events)
+        .await
+        .expect("executor tick");
 
     // transactions row inserted with the RPC-returned hash.
     let row = sqlx::query("SELECT id, status::text FROM transactions WHERE id = $1")
@@ -214,14 +281,25 @@ async fn processing_bundle_submitted_and_tx_row_recorded() {
 
 #[actix_web::test]
 async fn executor_skips_when_no_processing_bundles() {
-    let Some(db) = skip_if_no_db().await else { return; };
+    let Some(db) = skip_if_no_db().await else {
+        return;
+    };
     // No mocks needed — executor should make zero RPC calls.
     let rpc = MockServer::start().await;
 
     let config = cfg(&rpc.uri());
-    let server =
-        Server::new(&rpc.uri(), Options { allow_http: true, ..Options::default() }).unwrap();
-    run_tick(&server, &db.pool, &config).await.expect("executor tick on empty");
+    let server = Server::new(
+        &rpc.uri(),
+        Options {
+            allow_http: true,
+            ..Options::default()
+        },
+    )
+    .unwrap();
+    let events = EventBroadcaster::new(256, "GTESTPP".to_string());
+    run_tick(&server, &db.pool, &config, &events)
+        .await
+        .expect("executor tick on empty");
 
     let tx_count: i64 = sqlx::query_scalar("SELECT count(*) FROM transactions")
         .fetch_one(&db.pool)

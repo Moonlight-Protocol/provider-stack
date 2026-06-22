@@ -44,7 +44,9 @@ async fn seed_bundles(repo: &OperationsBundleRepo) {
     )
     .await
     .unwrap();
-    repo.set_status("processing-1", BundleStatus::Processing).await.unwrap();
+    repo.set_status("processing-1", BundleStatus::Processing)
+        .await
+        .unwrap();
     // 3 COMPLETED
     for i in 0..3 {
         repo.create(
@@ -57,7 +59,9 @@ async fn seed_bundles(repo: &OperationsBundleRepo) {
         )
         .await
         .unwrap();
-        repo.set_status(&format!("completed-{i}"), BundleStatus::Completed).await.unwrap();
+        repo.set_status(&format!("completed-{i}"), BundleStatus::Completed)
+            .await
+            .unwrap();
     }
     // 1 EXPIRED
     repo.create(
@@ -70,7 +74,9 @@ async fn seed_bundles(repo: &OperationsBundleRepo) {
     )
     .await
     .unwrap();
-    repo.set_status("expired-1", BundleStatus::Expired).await.unwrap();
+    repo.set_status("expired-1", BundleStatus::Expired)
+        .await
+        .unwrap();
     // 1 FAILED
     repo.create(
         "failed-1",
@@ -82,12 +88,16 @@ async fn seed_bundles(repo: &OperationsBundleRepo) {
     )
     .await
     .unwrap();
-    repo.set_status("failed-1", BundleStatus::Failed).await.unwrap();
+    repo.set_status("failed-1", BundleStatus::Failed)
+        .await
+        .unwrap();
 }
 
 #[actix_web::test]
 async fn snapshot_records_per_status_counts() {
-    let Some(db) = skip_if_no_db().await else { return; };
+    let Some(db) = skip_if_no_db().await else {
+        return;
+    };
     let repo = OperationsBundleRepo::new(db.pool.clone());
     seed_bundles(&repo).await;
 
@@ -112,7 +122,9 @@ async fn snapshot_records_per_status_counts() {
 
 #[actix_web::test]
 async fn snapshot_with_empty_db_writes_zeros() {
-    let Some(db) = skip_if_no_db().await else { return; };
+    let Some(db) = skip_if_no_db().await else {
+        return;
+    };
 
     snapshot(&db.pool).await.expect("snapshot");
 

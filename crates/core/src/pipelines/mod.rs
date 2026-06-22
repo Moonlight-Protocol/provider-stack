@@ -24,7 +24,11 @@ pub fn spawn_all(
         tokio::spawn(mempool::run(config.clone(), pool.clone(), events.clone())),
         tokio::spawn(executor::run(config.clone(), pool.clone(), events.clone())),
         tokio::spawn(verifier::run(config.clone(), pool.clone(), events.clone())),
-        tokio::spawn(event_watcher::run(config.clone(), pool.clone(), events.clone())),
+        tokio::spawn(event_watcher::run(
+            config.clone(),
+            pool.clone(),
+            events.clone(),
+        )),
         tokio::spawn(metrics::run(config, pool)),
     ]
 }
