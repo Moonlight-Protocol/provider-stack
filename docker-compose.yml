@@ -1,0 +1,68 @@
+# provider-stack — self-host compose stack.
+#
+# `docker compose up` brings up the provider-stack app (built from the repo
+# Dockerfile) plus its Postgres, wired together. The Stellar RPC is EXTERNAL:
+# point STELLAR_RPC_URL at a real testnet/mainnet RPC in your .env — it is not
+# a container here.
+#
+# 1. cp .env.example .env  and fill in the secrets (see comments in .env.example)
+# 2. docker compose up --build
+# 3. app serves on http://localhost:${PORT:-3000} (UI + GET /health)
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-provider}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-provider}
+      POSTGRES_DB: ${POSTGRES_DB:-provider_stack}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      # app depends_on this being healthy so migrations (sqlx::migrate! on boot)
+      # never race an un-ready Postgres.
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-provider} -d ${POSTGRES_DB:-provider_stack}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      # Override the DB host so it always points at the compose `db` service,
+      # regardless of what a self-hoster left in .env. Internal port is 5432.
+      DATABASE_URL: postgres://${POSTGRES_USER:-provider}:${POSTGRES_PASSWORD:-provider}@db:5432/${POSTGRES_DB:-provider_stack}
+    ports:
+      # Both sides track PORT: the app binds 0.0.0.0:$PORT inside the container
+      # (config.rs reads PORT), so the published port must match it.
+      - "${PORT:-3000}:${PORT:-3000}"
+    # No app-level healthcheck: the runtime image is distroless (no shell, no
+    # curl/wget) and the binary exposes no `healthcheck` subcommand, so there is
+    # nothing infra-only to probe with. Boot ordering is already guaranteed by
+    # `db`'s healthcheck above (migrations run on boot once Postgres is healthy).
+    # Liveness is observable from the host: GET http://localhost:${PORT}/health.
+
+  # --- Optional observability -------------------------------------------------
+  # The app emits OTLP traces to OTEL_EXPORTER_OTLP_ENDPOINT (default
+  # http://localhost:4318) and silently continues if nothing is listening, so
+  # observability is NOT a hard dependency. To collect traces, uncomment this
+  # Jaeger service and set OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4318 in .env.
+  #
+  # jaeger:
+  #   image: jaegertracing/all-in-one:1.57
+  #   restart: unless-stopped
+  #   ports:
+  #     - "16686:16686"   # Jaeger UI
+  #     - "4318:4318"     # OTLP HTTP receiver
+
+volumes:
+  pgdata:

@@ -26,6 +26,8 @@ const BUFFER_SHIM = resolve(SRC_DIR, "shims/buffer.ts");
 const OUTFILE = resolve(PROJECT_ROOT, "public/app.js");
 const DENO_JSON = resolve(PROJECT_ROOT, "deno.json");
 const HEALTH_OUT = resolve(PROJECT_ROOT, "public/health.json");
+const INDEX_OUT = resolve(PROJECT_ROOT, "public/index.html");
+const CONFIG_OUT = resolve(PROJECT_ROOT, "public/config.js");
 
 // Pinned @moonlight/ui tag. raw.githubusercontent.com serves CSS as
 // text/plain with nosniff so browsers refuse @import of these URLs; we
@@ -45,6 +47,43 @@ async function writeHealthJson(version: string): Promise<void> {
   const health = { status: "ok", service: "provider-console", version };
   await Deno.writeTextFile(HEALTH_OUT, JSON.stringify(health) + "\n");
   console.log(`Built public/health.json (provider-console ${version})`);
+}
+
+// Runtime config consumed by src/lib/config.ts via window.__CONSOLE_CONFIG__.
+// Loaded as a blocking classic script in index.html BEFORE the deferred app.js
+// module, so the global is set before config.ts reads it. The provider-stack
+// binary serves the API same-origin under /api/v1, so that is the default here.
+async function writeConfigJs(): Promise<void> {
+  const body =
+    `// provider-console runtime config — served same-origin by provider-stack.\n` +
+    `// Edit to match your deployment; the SPA reads window.__CONSOLE_CONFIG__.\n` +
+    `window.__CONSOLE_CONFIG__ = {\n` +
+    `  apiBaseUrl: "/api/v1",\n` +
+    `};\n`;
+  await Deno.writeTextFile(CONFIG_OUT, body);
+  console.log("Built public/config.js");
+}
+
+// SPA entry document. The router mounts into #app; config.js sets the runtime
+// config before app.js (an ESM bundle, hence type="module") evaluates.
+async function writeIndexHtml(): Promise<void> {
+  const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Moonlight Provider Console</title>
+  <link rel="stylesheet" href="/styles.css" />
+  <script src="/config.js"></script>
+</head>
+<body>
+  <div id="app"></div>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
+`;
+  await Deno.writeTextFile(INDEX_OUT, html);
+  console.log("Built public/index.html");
 }
 
 async function buildStyles(): Promise<void> {
@@ -78,6 +117,8 @@ const version = denoJson.version ?? "0.0.0";
 await Deno.mkdir(resolve(PROJECT_ROOT, "public"), { recursive: true });
 
 await writeHealthJson(version);
+await writeConfigJs();
+await writeIndexHtml();
 
 await buildStyles();
 

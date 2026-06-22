@@ -1,4 +1,4 @@
-.PHONY: build frontend backend fmt clippy test docker clean
+.PHONY: build frontend backend fmt clippy test docker compose-up clean
 
 build: frontend backend
 
@@ -19,6 +19,12 @@ test:
 
 docker:
 	docker buildx build --platform linux/amd64,linux/arm64 -t provider-stack:dev .
+
+# Self-host path: app + Postgres via compose. Seeds .env from the example on
+# first run so `make compose-up` works from a clean checkout.
+compose-up:
+	@test -f .env || cp .env.example .env
+	docker compose up --build
 
 clean:
 	cargo clean
