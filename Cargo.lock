@@ -2761,7 +2761,7 @@ dependencies = [
 
 [[package]]
 name = "provider-stack-api"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "actix-cors",
  "actix-files",
@@ -2803,7 +2803,7 @@ dependencies = [
 
 [[package]]
 name = "provider-stack-core"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -2834,7 +2834,7 @@ dependencies = [
 
 [[package]]
 name = "provider-stack-persistence"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2849,7 +2849,7 @@ dependencies = [
 
 [[package]]
 name = "provider-stack-sdk"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "moonlight-auth",
