@@ -165,7 +165,7 @@ async fn join_relays_envelope_and_creates_pending_membership() {
     .await;
 
     let req = test::TestRequest::post()
-        .uri(&format!("/api/v1/providers/{pp_pk}/council/join"))
+        .uri("/api/v1/provider/council/join")
         .insert_header(("Authorization", format!("Bearer {token}")))
         .set_json(json!({
             "councilUrl": format!("{}?council=CABC123", council.uri()),
@@ -203,7 +203,7 @@ async fn join_relays_envelope_and_creates_pending_membership() {
 
     // GET /council/membership returns it.
     let req = test::TestRequest::get()
-        .uri(&format!("/api/v1/providers/{pp_pk}/council/membership"))
+        .uri("/api/v1/provider/council/membership")
         .insert_header(("Authorization", format!("Bearer {token}")))
         .to_request();
     let body: serde_json::Value = test::call_and_read_body_json(&app, req).await;
@@ -222,7 +222,6 @@ async fn join_requires_operator_jwt() {
 
     let pp_seed = [0xABu8; 32];
     let operator_strkey = pp_strkey([0xCCu8; 32]);
-    let pp_pk = pp_strkey(pp_seed);
     let state = build_test_app_state(pp_seed, operator_strkey, db.pool.clone(), SERVICE_DOMAIN);
 
     let app = test::init_service(
@@ -233,7 +232,7 @@ async fn join_requires_operator_jwt() {
     .await;
 
     let req = test::TestRequest::post()
-        .uri(&format!("/api/v1/providers/{pp_pk}/council/join"))
+        .uri("/api/v1/provider/council/join")
         .set_json(json!({
             "councilUrl": "http://example.com",
             "signedEnvelope": {}

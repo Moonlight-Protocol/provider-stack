@@ -137,7 +137,7 @@ async fn ws_subprotocol_negotiated_event_arrives_and_ping_is_answered() {
     let state = make_state(events.clone()); // separate state instance, same secret → same JWT verification
     let jwt = entity_jwt(&state);
 
-    let mut req = format!("ws://127.0.0.1:{port}/api/v1/providers/PP/events/ws")
+    let mut req = format!("ws://127.0.0.1:{port}/api/v1/provider/events/ws")
         .into_client_request()
         .expect("client request");
     // No whitespace after the comma — tungstenite's client subprotocol parsing splits on
@@ -222,7 +222,7 @@ async fn ws_rejects_request_without_bearer_protocol() {
     let (port, _events, handle) = boot_server().await;
 
     // No Sec-WebSocket-Protocol header → the upgrade itself should not be authorised.
-    let req = format!("ws://127.0.0.1:{port}/api/v1/providers/PP/events/ws")
+    let req = format!("ws://127.0.0.1:{port}/api/v1/provider/events/ws")
         .into_client_request()
         .expect("client request");
 

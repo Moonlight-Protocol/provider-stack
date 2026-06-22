@@ -1,14 +1,12 @@
 //! HTTP integration test for the KYC self-register flow.
 //!
-//!   POST /api/v1/providers/{pk}/entities/challenge { pubkey } → { nonce }
-//!   POST /api/v1/providers/{pk}/entities { pubkey, name, jurisdictions, nonce, signature }
+//!   POST /api/v1/provider/entities/challenge { pubkey } → { nonce }
+//!   POST /api/v1/provider/entities { pubkey, name, jurisdictions, nonce, signature }
 //!     → 201 { entity_id, status: "APPROVED" }
 //!
 //! Asserts:
 //! - A valid roundtrip auto-approves the entity (entities.status = APPROVED) and provisions
 //!   one USER account + one wallet_users row.
-//! - Re-submitting works idempotently (same entity, same status).
-//! - Submitting against a PK that isn't this stack's PP returns 404.
 //! - Signature mismatch returns 401.
 //!
 //! Requires `DATABASE_URL` (a Postgres instance reachable for CREATEDB). When unset, the
@@ -48,7 +46,6 @@ async fn full_kyc_register_roundtrip_auto_approves() {
 
     let pp_seed = [0xABu8; 32];
     let operator_strkey = pp_strkey([0xCCu8; 32]);
-    let pp_pk = pp_strkey(pp_seed);
 
     let state = build_test_app_state(pp_seed, operator_strkey, db.pool.clone(), SERVICE_DOMAIN);
 
@@ -64,7 +61,7 @@ async fn full_kyc_register_roundtrip_auto_approves() {
 
     // 1. Challenge.
     let req = test::TestRequest::post()
-        .uri(&format!("/api/v1/providers/{pp_pk}/entities/challenge"))
+        .uri("/api/v1/provider/entities/challenge")
         .set_json(serde_json::json!({ "pubkey": entity_strkey }))
         .to_request();
     let body: serde_json::Value = test::call_and_read_body_json(&app, req).await;
@@ -76,7 +73,7 @@ async fn full_kyc_register_roundtrip_auto_approves() {
     // 2. Register with the signed nonce.
     let signature = sign_nonce(&entity_key, &nonce);
     let req = test::TestRequest::post()
-        .uri(&format!("/api/v1/providers/{pp_pk}/entities"))
+        .uri("/api/v1/provider/entities")
         .set_json(serde_json::json!({
             "pubkey": entity_strkey,
             "name": "Test Entity",
@@ -130,48 +127,6 @@ async fn full_kyc_register_roundtrip_auto_approves() {
 }
 
 #[actix_web::test]
-async fn register_rejects_unknown_pp_with_404() {
-    let Some(db) = skip_if_no_db().await else {
-        return;
-    };
-
-    let pp_seed = [0xABu8; 32];
-    let operator_strkey = pp_strkey([0xCCu8; 32]);
-    let state = build_test_app_state(pp_seed, operator_strkey, db.pool.clone(), SERVICE_DOMAIN);
-
-    let app = test::init_service(
-        App::new()
-            .app_data(web::Data::new(state.clone()))
-            .configure(routing::configure),
-    )
-    .await;
-
-    let entity_strkey = strkey(
-        SigningKey::from_bytes(&[0xEEu8; 32])
-            .verifying_key()
-            .to_bytes(),
-    );
-    // Use a different (random) "PP" in the URL.
-    let unknown_pp = pp_strkey([0xDEu8; 32]);
-
-    let req = test::TestRequest::post()
-        .uri(&format!(
-            "/api/v1/providers/{unknown_pp}/entities/challenge"
-        ))
-        .set_json(serde_json::json!({ "pubkey": entity_strkey }))
-        .to_request();
-    let resp = test::call_service(&app, req).await;
-    assert_eq!(
-        resp.status().as_u16(),
-        404,
-        "unknown PP must 404; got {}",
-        resp.status()
-    );
-
-    db.cleanup().await;
-}
-
-#[actix_web::test]
 async fn register_rejects_bad_signature_with_401() {
     let Some(db) = skip_if_no_db().await else {
         return;
@@ -179,7 +134,6 @@ async fn register_rejects_bad_signature_with_401() {
 
     let pp_seed = [0xABu8; 32];
     let operator_strkey = pp_strkey([0xCCu8; 32]);
-    let pp_pk = pp_strkey(pp_seed);
 
     let state = build_test_app_state(pp_seed, operator_strkey, db.pool.clone(), SERVICE_DOMAIN);
 
@@ -194,7 +148,7 @@ async fn register_rejects_bad_signature_with_401() {
     let entity_strkey = strkey(entity_key.verifying_key().to_bytes());
 
     let req = test::TestRequest::post()
-        .uri(&format!("/api/v1/providers/{pp_pk}/entities/challenge"))
+        .uri("/api/v1/provider/entities/challenge")
         .set_json(serde_json::json!({ "pubkey": entity_strkey }))
         .to_request();
     let body: serde_json::Value = test::call_and_read_body_json(&app, req).await;
@@ -204,7 +158,7 @@ async fn register_rejects_bad_signature_with_401() {
     let attacker_key = SigningKey::from_bytes(&[0x55u8; 32]);
     let bad_sig = sign_nonce(&attacker_key, &nonce);
     let req = test::TestRequest::post()
-        .uri(&format!("/api/v1/providers/{pp_pk}/entities"))
+        .uri("/api/v1/provider/entities")
         .set_json(serde_json::json!({
             "pubkey": entity_strkey,
             "signedChallenge": { "nonce": nonce, "signature": bad_sig },

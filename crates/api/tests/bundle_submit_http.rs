@@ -51,6 +51,20 @@ fn entity_jwt(state: &provider_stack_api::state::AppState) -> String {
     .expect("mint entity JWT")
 }
 
+/// The submit endpoint gates on the submitter entity being APPROVED, so seed it.
+async fn seed_approved_entity(pool: &provider_stack_persistence::PgPool) {
+    provider_stack_persistence::EntityRepo::new(pool.clone())
+        .create(
+            &entity_strkey(),
+            provider_stack_persistence::EntityStatus::Approved,
+            None,
+            None,
+            None,
+        )
+        .await
+        .expect("seed approved entity");
+}
+
 // ---- MLXDR builders matching moonlight-sdk's wire format ----
 
 fn i128_parts(v: i128) -> Int128Parts {
@@ -109,8 +123,8 @@ async fn bundle_with_deposit_plus_create_computes_correct_fee() {
     let pp_seed = [0xABu8; 32];
     let operator_strkey = pp_strkey([0xCCu8; 32]);
     let state = build_test_app_state(pp_seed, operator_strkey, db.pool.clone(), SERVICE_DOMAIN);
-    let pp_pk = pp_strkey(pp_seed);
     let token = entity_jwt(&state);
+    seed_approved_entity(&db.pool).await;
 
     let app = test::init_service(
         App::new()
@@ -127,7 +141,7 @@ async fn bundle_with_deposit_plus_create_computes_correct_fee() {
     ];
 
     let req = test::TestRequest::post()
-        .uri(&format!("/api/v1/providers/{pp_pk}/entity/bundles"))
+        .uri("/api/v1/provider/entity/bundles")
         .insert_header(("Authorization", format!("Bearer {token}")))
         .set_json(json!({ "operationsMLXDR": ops }))
         .to_request();
@@ -176,8 +190,8 @@ async fn empty_operations_returns_400() {
     let pp_seed = [0xABu8; 32];
     let operator_strkey = pp_strkey([0xCCu8; 32]);
     let state = build_test_app_state(pp_seed, operator_strkey, db.pool.clone(), SERVICE_DOMAIN);
-    let pp_pk = pp_strkey(pp_seed);
     let token = entity_jwt(&state);
+    seed_approved_entity(&db.pool).await;
 
     let app = test::init_service(
         App::new()
@@ -187,7 +201,7 @@ async fn empty_operations_returns_400() {
     .await;
 
     let req = test::TestRequest::post()
-        .uri(&format!("/api/v1/providers/{pp_pk}/entity/bundles"))
+        .uri("/api/v1/provider/entity/bundles")
         .insert_header(("Authorization", format!("Bearer {token}")))
         .set_json(json!({ "operationsMLXDR": [] }))
         .to_request();
@@ -211,7 +225,6 @@ async fn missing_jwt_returns_401() {
     let pp_seed = [0xABu8; 32];
     let operator_strkey = pp_strkey([0xCCu8; 32]);
     let state = build_test_app_state(pp_seed, operator_strkey, db.pool.clone(), SERVICE_DOMAIN);
-    let pp_pk = pp_strkey(pp_seed);
 
     let app = test::init_service(
         App::new()
@@ -221,7 +234,7 @@ async fn missing_jwt_returns_401() {
     .await;
 
     let req = test::TestRequest::post()
-        .uri(&format!("/api/v1/providers/{pp_pk}/entity/bundles"))
+        .uri("/api/v1/provider/entity/bundles")
         .set_json(json!({ "operationsMLXDR": [deposit_mlxdr(100)] }))
         .to_request();
     let resp = test::call_service(&app, req).await;
@@ -244,8 +257,8 @@ async fn non_mlxdr_string_returns_400() {
     let pp_seed = [0xABu8; 32];
     let operator_strkey = pp_strkey([0xCCu8; 32]);
     let state = build_test_app_state(pp_seed, operator_strkey, db.pool.clone(), SERVICE_DOMAIN);
-    let pp_pk = pp_strkey(pp_seed);
     let token = entity_jwt(&state);
+    seed_approved_entity(&db.pool).await;
 
     let app = test::init_service(
         App::new()
@@ -255,7 +268,7 @@ async fn non_mlxdr_string_returns_400() {
     .await;
 
     let req = test::TestRequest::post()
-        .uri(&format!("/api/v1/providers/{pp_pk}/entity/bundles"))
+        .uri("/api/v1/provider/entity/bundles")
         .insert_header(("Authorization", format!("Bearer {token}")))
         .set_json(json!({ "operationsMLXDR": ["not-real-mlxdr"] }))
         .to_request();

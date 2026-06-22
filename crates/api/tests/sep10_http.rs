@@ -147,7 +147,7 @@ async fn sep10_full_roundtrip_issues_entity_jwt() {
     // 3. POST back, expect JWT.
     let req = test::TestRequest::post()
         .uri("/api/v1/stellar/auth")
-        .set_json(serde_json::json!({ "transaction": signed_b64 }))
+        .set_json(serde_json::json!({ "signedChallenge": signed_b64 }))
         .to_request();
     let resp = test::call_service(&app, req).await;
     assert!(
@@ -156,9 +156,9 @@ async fn sep10_full_roundtrip_issues_entity_jwt() {
         resp.status()
     );
     let body: serde_json::Value = test::read_body_json(resp).await;
-    let token = body["data"]["token"]
+    let token = body["data"]["jwt"]
         .as_str()
-        .expect("data.token field")
+        .expect("data.jwt field")
         .to_string();
 
     // 4. Decode + assert claims.
@@ -210,7 +210,7 @@ async fn sep10_post_rejects_envelope_without_client_signature() {
     // Don't co-sign; just post it back as the entity, expect 401.
     let req = test::TestRequest::post()
         .uri("/api/v1/stellar/auth")
-        .set_json(serde_json::json!({ "transaction": envelope_b64 }))
+        .set_json(serde_json::json!({ "signedChallenge": envelope_b64 }))
         .to_request();
     let resp = test::call_service(&app, req).await;
     assert_eq!(

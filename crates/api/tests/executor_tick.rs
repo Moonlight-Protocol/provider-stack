@@ -28,8 +28,9 @@ use std::time::Duration as StdDuration;
 // internally uses v26 via stellar-baselib. To construct values that soroban-client will accept,
 // use the re-exports under soroban_client::xdr, NOT the top-level stellar_xdr crate.
 use soroban_client::xdr::{
-    AccountEntry, AccountEntryExt, AccountId, LedgerEntryData, LedgerKey, LedgerKeyAccount, Limits,
-    PublicKey, SequenceNumber, String32, StringM, Thresholds, Uint256, VecM, WriteXdr,
+    AccountEntry, AccountEntryExt, AccountId, LedgerEntryData, LedgerFootprint, LedgerKey,
+    LedgerKeyAccount, Limits, PublicKey, SequenceNumber, SorobanResources, SorobanTransactionData,
+    SorobanTransactionDataExt, String32, StringM, Thresholds, Uint256, VecM, WriteXdr,
 };
 use wiremock::matchers::{body_partial_json, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -100,6 +101,47 @@ fn send_tx_response(hash: &str) -> Value {
     })
 }
 
+/// Minimal SorobanTransactionData (empty footprint, zero resources) — enough for
+/// `assemble_transaction` to attach soroban_data and proceed.
+fn soroban_tx_data_b64() -> String {
+    let data = SorobanTransactionData {
+        ext: SorobanTransactionDataExt::V0,
+        resources: SorobanResources {
+            footprint: LedgerFootprint {
+                read_only: VecM::default(),
+                read_write: VecM::default(),
+            },
+            instructions: 0,
+            disk_read_bytes: 0,
+            write_bytes: 0,
+        },
+        resource_fee: 100,
+    };
+    data.to_xdr_base64(Limits::none())
+        .expect("encode soroban tx data")
+}
+
+fn simulate_tx_response() -> Value {
+    json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+            "latestLedger": 1234u32,
+            "minResourceFee": "100",
+            "transactionData": soroban_tx_data_b64(),
+            "events": []
+        }
+    })
+}
+
+fn latest_ledger_response() -> Value {
+    json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": { "id": "ledgerhash", "sequence": 1234u32, "protocolVersion": 22u32 }
+    })
+}
+
 fn cfg(rpc_url: &str) -> Arc<Config> {
     Arc::new(Config {
         port: 0,
@@ -159,6 +201,22 @@ async fn processing_bundle_submitted_and_tx_row_recorded() {
         .respond_with(
             ResponseTemplate::new(200).set_body_json(send_tx_response("TX_HASH_FROM_RPC")),
         )
+        .mount(&rpc)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/"))
+        .and(body_partial_json(
+            json!({ "method": "simulateTransaction" }),
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(simulate_tx_response()))
+        .mount(&rpc)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/"))
+        .and(body_partial_json(json!({ "method": "getLatestLedger" })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(latest_ledger_response()))
         .mount(&rpc)
         .await;
 
