@@ -282,3 +282,64 @@ async fn non_mlxdr_string_returns_400() {
 
     db.cleanup().await;
 }
+
+/// UC5: once the standin has been removed from its council (a REJECTED
+/// membership and no surviving ACTIVE one), new bundle submissions are refused
+/// even from an approved entity — users move to a different PP.
+#[actix_web::test]
+async fn removed_from_council_rejects_new_bundles() {
+    let Some(db) = skip_if_no_db().await else {
+        return;
+    };
+
+    let pp_seed = [0xABu8; 32];
+    let operator_strkey = pp_strkey([0xCCu8; 32]);
+    let state = build_test_app_state(pp_seed, operator_strkey, db.pool.clone(), SERVICE_DOMAIN);
+    let token = entity_jwt(&state);
+    seed_approved_entity(&db.pool).await;
+
+    // Seed a membership and mark it REJECTED — the post-removal state the
+    // event-watcher / convergence leaves behind.
+    let memberships = provider_stack_persistence::CouncilMembershipRepo::new(db.pool.clone());
+    memberships
+        .create(
+            &uuid::Uuid::new_v4().to_string(),
+            "https://council.example",
+            "GCOUNCIL",
+            "CREMOVEDCOUNCIL",
+            Some("[\"US\"]"),
+        )
+        .await
+        .expect("seed membership");
+    memberships
+        .set_status(
+            "CREMOVEDCOUNCIL",
+            provider_stack_persistence::CouncilMembershipStatus::Rejected,
+        )
+        .await
+        .expect("reject membership");
+
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state.clone()))
+            .configure(routing::configure),
+    )
+    .await;
+
+    // A bundle that would be accepted (201) if the PP were still active.
+    let ops = vec![deposit_mlxdr(1000), create_mlxdr([0x11u8; 65], 1000)];
+    let req = test::TestRequest::post()
+        .uri("/api/v1/provider/entity/bundles")
+        .insert_header(("Authorization", format!("Bearer {token}")))
+        .set_json(json!({ "operationsMLXDR": ops }))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(
+        resp.status().as_u16(),
+        403,
+        "expected 403 once removed from council; got {}",
+        resp.status()
+    );
+
+    db.cleanup().await;
+}

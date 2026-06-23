@@ -12,6 +12,7 @@ use crate::error::ApiError;
 use crate::middleware_auth::OperatorAuth;
 use crate::state::AppState;
 use actix_web::{get, post, web, HttpResponse, Responder};
+use provider_stack_core::pipelines::membership_convergence::converge_membership_statuses;
 use provider_stack_persistence::{CouncilMembershipRepo, CouncilMembershipStatus};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
@@ -293,69 +294,15 @@ pub async fn post_membership(
     state: web::Data<AppState>,
     _auth: OperatorAuth,
 ) -> Result<impl Responder, ApiError> {
-    let repo = CouncilMembershipRepo::new(state.pool.clone());
-    let memberships = repo.list_active().await?;
-
-    // Council-platform answers "is this PP active in this council?" at
-    //   GET /api/v1/public/provider/membership-status?councilId=…&publicKey=…
-    //   200 → "ACTIVE", 202 → "PENDING", 404 → "NOT_FOUND" (rejected)
-    // The PP we ask about is this stack's env-pinned operator key.
-    let signing =
-        provider_stack_core::auth::sep10::signing_key_from_seed(&state.config.pp_secret_key)?;
-    let pp_pubkey = format!(
-        "{}",
-        stellar_strkey::ed25519::PublicKey(signing.verifying_key().to_bytes())
-    );
-
-    let client = reqwest::Client::builder()
-        .timeout(COUNCIL_HTTP_TIMEOUT)
-        .build()
+    // Operator-driven sync. Reconcile every membership against the council's
+    // authoritative membership-status endpoint (200 → ACTIVE, 202 → PENDING,
+    // 404 → REJECTED) via the shared convergence used by boot and the inbound
+    // removal notice, then report the post-sync truth the SPA polls for.
+    let conv = converge_membership_statuses(&state.config, &state.pool)
+        .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
 
-    let mut updated = 0usize;
-    for m in &memberships {
-        let url = format!(
-            "{}/api/v1/public/provider/membership-status?councilId={}&publicKey={}",
-            m.council_url.trim_end_matches('/'),
-            urlencoding(&m.channel_auth_id),
-            urlencoding(&pp_pubkey),
-        );
-        let Ok(resp) = client.get(&url).send().await else {
-            continue;
-        };
-        let http_status = resp.status();
-        // 404 = council-platform considers the PP not-a-member (either never joined
-        // or its request was rejected). Demote local row to REJECTED.
-        if http_status.as_u16() == 404 {
-            if m.status != CouncilMembershipStatus::Rejected {
-                repo.set_status(&m.channel_auth_id, CouncilMembershipStatus::Rejected)
-                    .await?;
-                updated += 1;
-            }
-            continue;
-        }
-        // Any other non-2xx: skip — don't clobber the watcher's truth on a transient.
-        if !http_status.is_success() && http_status.as_u16() != 202 {
-            continue;
-        }
-        let Ok(body) = resp.json::<JsonValue>().await else {
-            continue;
-        };
-        let Some(status_str) = body.get("status").and_then(|s| s.as_str()) else {
-            continue;
-        };
-        let new_status = match status_str {
-            "ACTIVE" => CouncilMembershipStatus::Active,
-            "PENDING" => CouncilMembershipStatus::Pending,
-            _ => continue,
-        };
-        if new_status != m.status {
-            repo.set_status(&m.channel_auth_id, new_status).await?;
-            updated += 1;
-        }
-    }
-
-    // Re-read after the writes so the response reflects the post-sync truth.
+    let repo = CouncilMembershipRepo::new(state.pool.clone());
     let latest_status = repo
         .list_active()
         .await?
@@ -368,9 +315,44 @@ pub async fn post_membership(
         .map(str::to_string);
 
     Ok(HttpResponse::Ok().json(Data::new(SyncPayload {
-        memberships: memberships.len(),
-        updated,
+        memberships: conv.checked,
+        updated: conv.updated,
         status: latest_status,
+    })))
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemovedPayload {
+    /// How many memberships this notice demoted to REJECTED.
+    pub deactivated: usize,
+}
+
+/// Inbound "you were removed" notice from a council-platform.
+///
+/// Low-trust live signal: it carries no operator auth and is not believed on its
+/// own. It triggers the same convergence-by-query the watcher and boot use — we
+/// re-ask the council's authoritative membership-status endpoint and only demote
+/// memberships the council confirms are gone (404). A spurious or forged call can
+/// at most make us re-confirm our own status. The on-chain event-watcher remains
+/// the can't-miss path; this just reacts immediately instead of on the next poll.
+#[post("/provider/council/removed")]
+pub async fn post_removed(state: web::Data<AppState>) -> Result<impl Responder, ApiError> {
+    let repo = CouncilMembershipRepo::new(state.pool.clone());
+    let rejected = |ms: &[provider_stack_persistence::CouncilMembership]| {
+        ms.iter()
+            .filter(|m| m.status == CouncilMembershipStatus::Rejected)
+            .count()
+    };
+
+    let before = rejected(&repo.list_active().await?);
+    converge_membership_statuses(&state.config, &state.pool)
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    let after = rejected(&repo.list_active().await?);
+
+    Ok(HttpResponse::Accepted().json(Data::new(RemovedPayload {
+        deactivated: after.saturating_sub(before),
     })))
 }
 
