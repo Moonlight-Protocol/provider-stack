@@ -52,6 +52,23 @@ pub async fn run(config: Arc<Config>, pool: PgPool, events: EventBroadcaster) {
         warn!(error = %e, "boot-time channel convergence failed");
     }
 
+    // UC5 convergence: same idea for membership. Ask the council whether this PP
+    // is still a member of each council it has a row for, so a `provider_removed`
+    // that landed while the standin was down is honoured on boot even if the
+    // in-memory cursor missed it. Best-effort, like channel convergence.
+    match crate::pipelines::membership_convergence::converge_membership_statuses(&config, &pool)
+        .await
+    {
+        Ok(c) if c.updated > 0 => {
+            info!(
+                updated = c.updated,
+                "boot-time membership convergence applied"
+            )
+        }
+        Ok(_) => {}
+        Err(e) => warn!(error = %e, "boot-time membership convergence failed"),
+    }
+
     let mut tick = interval(config.event_watcher_interval);
     tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
     let processing = Arc::new(Mutex::new(false));

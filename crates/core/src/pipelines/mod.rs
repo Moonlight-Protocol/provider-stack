@@ -3,6 +3,7 @@
 
 pub mod event_watcher;
 pub mod executor;
+pub mod membership_convergence;
 pub mod mempool;
 pub mod metrics;
 pub mod verifier;

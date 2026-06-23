@@ -63,6 +63,31 @@ pub async fn post_submit(
         return Err(ApiError::Forbidden);
     }
 
+    // UC5 removal gate. A PP removed from its council must stop accepting new
+    // bundles. The event-watcher marks the membership REJECTED on the on-chain
+    // `provider_removed` event (and boot/notice convergence backstops it); once
+    // the standin has been removed — a REJECTED membership and no surviving
+    // ACTIVE one — refuse new submissions so users move to a different PP. We
+    // only gate on an *observed* removal, never on the mere absence of a
+    // membership, so stacks that operate without a council row are unaffected.
+    {
+        let memberships =
+            provider_stack_persistence::CouncilMembershipRepo::new(state.pool.clone())
+                .list_active()
+                .await?;
+        let has_active = memberships
+            .iter()
+            .any(|m| m.status == provider_stack_persistence::CouncilMembershipStatus::Active);
+        let removed = !has_active
+            && memberships
+                .iter()
+                .any(|m| m.status == provider_stack_persistence::CouncilMembershipStatus::Rejected);
+        if removed {
+            tracing::info!("rejecting bundle: PP removed from its council");
+            return Err(ApiError::Forbidden);
+        }
+    }
+
     let SubmitReq {
         operations_mlxdr,
         channel_contract_id,
