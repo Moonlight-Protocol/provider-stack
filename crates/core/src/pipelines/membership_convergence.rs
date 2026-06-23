@@ -2,12 +2,11 @@
 //!
 //! Ask the council-platform whether this stack's PP is still an active member of
 //! each council it holds a membership row for, and reconcile the local
-//! `council_memberships.status` to match. Shared by three callers:
+//! `council_memberships.status` to match. Shared by two callers:
 //!  - boot, as the can't-miss baseline (alongside channel convergence), so a
 //!    `provider_removed` that landed while the standin was down is honoured even
 //!    if the in-memory cursor missed it;
-//!  - the operator-driven `POST /provider/council/membership` sync;
-//!  - the inbound `POST /provider/council/removed` low-trust live signal.
+//!  - the operator-driven `POST /provider/council/membership` sync.
 //!
 //! Best-effort: a council that is unreachable / 5xx leaves rows untouched, so a
 //! transient never clobbers the watcher's truth. Only an authoritative 404

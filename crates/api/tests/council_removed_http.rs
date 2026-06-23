@@ -1,18 +1,14 @@
-//! UC5: the standin honours its own removal from a council.
+//! UC5: the standin honours its own removal from a council via the pull path.
 //!
-//! Covers the convergence-by-query used by boot and by the inbound notice:
-//! when the council's authoritative membership-status endpoint reports the PP is
-//! no longer a member (404), the local membership row is demoted to REJECTED.
-//!  - `converge_membership_statuses` directly (the boot / out-of-retention path),
-//!  - `POST /api/v1/provider/council/removed` (the inbound live-signal endpoint).
+//! Covers boot convergence-by-query: when the council's authoritative
+//! membership-status endpoint reports the PP is no longer a member (404), the
+//! local membership row is demoted to REJECTED; a still-active PP is untouched.
 //!
 //! Wiremock fakes the council; a real per-test Postgres exercises the DB writes.
 
 mod common;
 
-use actix_web::{test, web, App};
 use common::{build_test_app_state, pp_strkey, TestDb};
-use provider_stack_api::routing;
 use provider_stack_core::pipelines::membership_convergence::converge_membership_statuses;
 use provider_stack_persistence::{CouncilMembershipRepo, CouncilMembershipStatus};
 use uuid::Uuid;
@@ -125,44 +121,6 @@ async fn convergence_leaves_active_membership_untouched() {
         .expect("convergence");
     assert_eq!(conv.updated, 0);
     assert_eq!(membership_status(&db).await, "ACTIVE");
-
-    db.cleanup().await;
-}
-
-#[actix_web::test]
-async fn inbound_removed_notice_demotes_membership() {
-    let Some(db) = skip_if_no_db().await else {
-        return;
-    };
-    let council = MockServer::start().await;
-    mount_not_a_member(&council).await;
-    seed_active_membership(&db, &council.uri()).await;
-
-    let state = build_test_app_state(
-        [0xABu8; 32],
-        pp_strkey([0xCCu8; 32]),
-        db.pool.clone(),
-        SERVICE_DOMAIN,
-    );
-    let app = test::init_service(
-        App::new()
-            .app_data(web::Data::new(state.clone()))
-            .configure(routing::configure),
-    )
-    .await;
-
-    // No auth: the notice is a low-trust live signal that only triggers a
-    // re-query against the council's authoritative endpoint.
-    let req = test::TestRequest::post()
-        .uri("/api/v1/provider/council/removed")
-        .set_json(serde_json::json!({ "councilId": CHANNEL_AUTH_ID }))
-        .to_request();
-    let resp = test::call_service(&app, req).await;
-    assert_eq!(resp.status().as_u16(), 202, "expected 202 Accepted");
-
-    let body: serde_json::Value = test::read_body_json(resp).await;
-    assert_eq!(body["data"]["deactivated"], 1);
-    assert_eq!(membership_status(&db).await, "REJECTED");
 
     db.cleanup().await;
 }
