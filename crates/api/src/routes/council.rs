@@ -321,41 +321,6 @@ pub async fn post_membership(
     })))
 }
 
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RemovedPayload {
-    /// How many memberships this notice demoted to REJECTED.
-    pub deactivated: usize,
-}
-
-/// Inbound "you were removed" notice from a council-platform.
-///
-/// Low-trust live signal: it carries no operator auth and is not believed on its
-/// own. It triggers the same convergence-by-query the watcher and boot use — we
-/// re-ask the council's authoritative membership-status endpoint and only demote
-/// memberships the council confirms are gone (404). A spurious or forged call can
-/// at most make us re-confirm our own status. The on-chain event-watcher remains
-/// the can't-miss path; this just reacts immediately instead of on the next poll.
-#[post("/provider/council/removed")]
-pub async fn post_removed(state: web::Data<AppState>) -> Result<impl Responder, ApiError> {
-    let repo = CouncilMembershipRepo::new(state.pool.clone());
-    let rejected = |ms: &[provider_stack_persistence::CouncilMembership]| {
-        ms.iter()
-            .filter(|m| m.status == CouncilMembershipStatus::Rejected)
-            .count()
-    };
-
-    let before = rejected(&repo.list_active().await?);
-    converge_membership_statuses(&state.config, &state.pool)
-        .await
-        .map_err(|e| ApiError::Internal(e.to_string()))?;
-    let after = rejected(&repo.list_active().await?);
-
-    Ok(HttpResponse::Accepted().json(Data::new(RemovedPayload {
-        deactivated: after.saturating_sub(before),
-    })))
-}
-
 // ---- helpers ----
 
 fn base_origin(parsed: &Url) -> String {

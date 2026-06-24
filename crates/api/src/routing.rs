@@ -20,7 +20,6 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
             .service(routes::council::post_join)
             .service(routes::council::get_membership)
             .service(routes::council::post_membership)
-            .service(routes::council::post_removed)
             .service(routes::bundles::post_submit)
             .service(routes::bundles::list_entity)
             .service(routes::bundles::get_entity_bundle)
