@@ -2,8 +2,6 @@
 
 Rust self-host Privacy Provider stack for Moonlight Protocol. Shipped as a `docker compose` stack (app image with backend + frontend bundled, plus its Postgres).
 
-Spec: `pm-theahaco/docs/rust-provider-stack/PLAN.md`.
-
 ## Layout
 
 ```
@@ -55,5 +53,4 @@ make compose-up      # cp .env.example -> .env if missing, then docker compose u
 
 ## Env vars
 
-See `.env.example` (authoritative, enumerated from `crates/core/src/config.rs`)
-and PLAN.md §Env var surface.
+See `.env.example` (authoritative, enumerated from `crates/core/src/config.rs`).
