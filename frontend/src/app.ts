@@ -10,6 +10,10 @@ import { providerView } from "./views/provider.ts";
 // Public KYC/KYB submission — no auth, isolated from operator session
 import { entitiesRegisterView } from "./views/entities/register.ts";
 
+// Entity UTXO payment surface — SEP-10 entity session, module-local only,
+// isolated from the operator session
+import { payUtxoView } from "./views/pay-utxo.ts";
+
 // Initialize analytics (NOOP in dev)
 initAnalytics();
 initTracer({ endpoint: OTEL_ENDPOINT, auth: OTEL_AUTH });
@@ -18,6 +22,7 @@ initTracer({ endpoint: OTEL_ENDPOINT, auth: OTEL_AUTH });
 // no per-PP URL — the provider view IS the home view, mounted at "/".
 route("/login", loginView);
 route("/entities/register", entitiesRegisterView);
+route("/pay-utxo", payUtxoView);
 
 // Root — render the provider view directly when authed, otherwise login.
 route("/", () => {
