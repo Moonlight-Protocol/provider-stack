@@ -11,6 +11,7 @@ declare global {
       posthogKey?: string;
       posthogHost?: string;
       environment?: string;
+      rpcUrl?: string;
       allowlist?: string[];
       otelEndpoint?: string;
       otelAuth?: string;
@@ -43,6 +44,16 @@ export const ENVIRONMENT = config.environment ?? "development";
 export const IS_PRODUCTION = ENVIRONMENT === "production";
 export const OTEL_ENDPOINT = config.otelEndpoint ?? "";
 export const OTEL_AUTH = config.otelAuth ?? "";
+// Soroban RPC — used by the entity payment surface for ledger reads. Same
+// per-network defaulting rule as HORIZON_URL (standalone = the quickstart's
+// same-origin /soroban/rpc path).
+export const RPC_URL = config.rpcUrl ?? (
+  STELLAR_NETWORK === "mainnet"
+    ? "https://mainnet.sorobanrpc.com"
+    : STELLAR_NETWORK === "standalone"
+    ? "http://localhost:8000/soroban/rpc"
+    : "https://soroban-testnet.stellar.org"
+);
 
 export function isAllowed(address: string): boolean {
   const list = config.allowlist ?? [];

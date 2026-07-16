@@ -110,3 +110,24 @@ export function getEntityJwtSub(): string | null {
 export function clearEntityAuth(): void {
   entityToken = null;
 }
+
+/**
+ * Authenticated fetch against the entity API surface. The JWT stays
+ * module-local; callers never see it.
+ */
+export function entityFetch(
+  path: string,
+  opts: RequestInit = {},
+): Promise<Response> {
+  if (!entityToken) {
+    return Promise.reject(new Error("Not signed in as an entity"));
+  }
+  return fetch(`${API_BASE_URL}${path}`, {
+    ...opts,
+    headers: withTraceparent({
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${entityToken}`,
+      ...(opts.headers as Record<string, string> ?? {}),
+    }),
+  });
+}

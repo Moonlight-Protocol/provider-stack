@@ -66,7 +66,7 @@ export async function connectEntityWallet(): Promise<string> {
 
 /**
  * Sign a transaction XDR with the entity's connected wallet.
- * Used to co-sign the SEP-10 challenge (and later, deposits).
+ * Used to co-sign the SEP-10 challenge.
  */
 export async function signEntityTransaction(xdr: string): Promise<string> {
   ensureInit();
@@ -79,4 +79,26 @@ export async function signEntityTransaction(xdr: string): Promise<string> {
   });
 
   return signedTxXdr;
+}
+
+/**
+ * Sign a Soroban authorization entry (base64 XDR) with the entity's wallet.
+ * Used to authorize channel deposits.
+ */
+export async function signEntityAuthEntry(
+  authEntryB64: string,
+  networkPassphrase: string,
+): Promise<string> {
+  ensureInit();
+  const address = entityAddress;
+  if (!address) throw new Error("Wallet not connected");
+
+  const { signedAuthEntry } = await StellarWalletsKit.signAuthEntry(
+    authEntryB64,
+    { address, networkPassphrase },
+  );
+  if (!signedAuthEntry) {
+    throw new Error("Wallet returned an empty auth entry signature");
+  }
+  return signedAuthEntry;
 }
