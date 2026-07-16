@@ -78,6 +78,12 @@ export async function signEntityTransaction(xdr: string): Promise<string> {
     networkPassphrase: getNetworkPassphrase(),
   });
 
+  if (typeof signedTxXdr !== "string" || signedTxXdr.length === 0) {
+    throw new Error(
+      "The wallet returned no signature. Check that Freighter is on the " +
+        "right network and the request was approved.",
+    );
+  }
   return signedTxXdr;
 }
 
