@@ -152,7 +152,7 @@ await esbuild.build({
       setup(build: esbuild.PluginBuild) {
         const sdkLib = resolve(
           PROJECT_ROOT,
-          "node_modules/.deno/@stellar+stellar-sdk@15.0.1/node_modules/@stellar/stellar-sdk/lib/index.js",
+          "node_modules/.deno/@stellar+stellar-sdk@15.1.0/node_modules/@stellar/stellar-sdk/lib/index.js",
         );
         build.onLoad(
           { filter: /stellar-sdk[/\\]dist[/\\]/ },
