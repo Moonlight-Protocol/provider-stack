@@ -183,15 +183,12 @@ appJs = appJs.replace(
     `if(${varName}==="buffer")return globalThis.__buffer_polyfill;throw ${errExpr}`,
 );
 
-// 2. Remove bare ESM buffer imports
+// 2+3. Replace ESM buffer imports (bare and node:) with polyfill vars.
+// Alias-aware: esbuild renames colliding imports (`Buffer as Buffer18`), so a
+// plain removal would leave the renamed references dangling — every imported
+// name must get a `var` bound to the polyfill.
 appJs = appJs.replace(
-  /import\s*\{[^}]*\}\s*from\s*"(?:node:)?buffer"\s*;?/g,
-  "",
-);
-
-// 3. Replace node:buffer imports with polyfill reference
-appJs = appJs.replace(
-  /import\s*\{([^}]*)\}\s*from\s*"node:buffer"\s*;?/g,
+  /import\s*\{([^}]*)\}\s*from\s*"(?:node:)?buffer"\s*;?/g,
   (_match, names) => {
     const exports = names.split(",").map((n: string) => n.trim()).filter(
       Boolean,
@@ -201,9 +198,6 @@ appJs = appJs.replace(
         s.trim()
       );
       const localName = alias || original;
-      if (original === "Buffer") {
-        return `var ${localName} = globalThis.__buffer_polyfill.Buffer;`;
-      }
       return `var ${localName} = globalThis.__buffer_polyfill.${original};`;
     }).join("\n");
   },
