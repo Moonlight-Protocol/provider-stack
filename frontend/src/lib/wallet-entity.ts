@@ -107,6 +107,16 @@ export async function signEntityMessage(message: string): Promise<string> {
   ) {
     throw new Error("Wallet returned an empty message signature");
   }
+  // Derived keys depend on WHO signed: a signature from any other account
+  // yields a different key set and silently orphans the user's funds. Fail
+  // loudly instead (Freighter reports the signer; some versions sign with
+  // the active account rather than the requested address).
+  if (result.signerAddress && result.signerAddress !== address) {
+    throw new Error(
+      `The wallet signed with ${result.signerAddress} instead of ${address}. ` +
+        "Switch the wallet's active account and retry.",
+    );
+  }
   return result.signedMessage;
 }
 
