@@ -17,9 +17,10 @@
  *     wallet on the next visit.
  *   - No session bleed: never reads or writes the operator-auth storage.
  *
- * The channel comes from query params (#/pay-utxo?channel=&asset=&auth=) —
- * there is no entity-facing channel-discovery endpoint. Channel-selection
- * UX is an open item.
+ * The channel is resolved from the provider itself (GET
+ * /provider/entity/channels — the PP's council membership) and auto-selected
+ * when there is exactly one. Channel-picker UX for multi-channel providers
+ * is an open item.
  */
 import { renderNav } from "@moonlight/ui/nav";
 import { pageLayout } from "@moonlight/ui/layout";
@@ -38,6 +39,7 @@ import {
   DEPOSIT_FEE,
   fromStroops,
   getBundle,
+  getEntityChannels,
   parseReceiverOps,
   prepareReceive,
   SEND_FEE,
@@ -47,7 +49,6 @@ import {
 } from "../lib/moonlight-client.ts";
 import {
   balance,
-  type ChannelIds,
   clearDerivation,
   fundedCount,
   initEntitySeed,
@@ -56,7 +57,7 @@ import {
 } from "../lib/utxo-derivation.ts";
 import { capture } from "../lib/analytics.ts";
 import { escapeHtml } from "../lib/dom.ts";
-import { getRouteQuery, navigate, onCleanup } from "../lib/router.ts";
+import { navigate, onCleanup } from "../lib/router.ts";
 import { startTrace, withSpan } from "../lib/tracer.ts";
 
 declare const __APP_VERSION__: string;
@@ -65,19 +66,6 @@ declare const __APP_VERSION__: string;
 
 function shortId(id: string): string {
   return id.length > 12 ? `${id.slice(0, 4)}…${id.slice(-4)}` : id;
-}
-
-function readChannelIds(): ChannelIds | null {
-  const q = getRouteQuery();
-  const channel = q.get("channel");
-  const asset = q.get("asset");
-  const auth = q.get("auth");
-  if (!channel || !asset || !auth) return null;
-  return {
-    channelContractId: channel,
-    assetContractId: asset,
-    channelAuthId: auth,
-  };
 }
 
 /** ui-stepper (Submitted → Processing → Completed) for a bundle status. */
@@ -165,9 +153,10 @@ function signOut(): void {
 
 // ── authenticated surface ──────────────────────────────────────
 
-function paySurface(): HTMLElement {
+async function paySurface(): Promise<HTMLElement> {
   const sub = getEntityJwtSub();
-  const channel = readChannelIds();
+  const channels = await getEntityChannels().catch(() => []);
+  const channel = channels[0] ?? null;
 
   const nav = renderNav({
     brand: "Pay (UTXO)",
@@ -181,17 +170,6 @@ function paySurface(): HTMLElement {
   content.className = "container";
   content.style.maxWidth = "680px";
   content.innerHTML = `
-    ${
-    channel
-      ? ""
-      : `<div class="membership-banner revoked" style="position:static;margin:1.5rem 0">
-          No channel configured. Open this page as
-          <span class="mono">#/pay-utxo?channel=…&amp;asset=…&amp;auth=…</span>
-          (channel, asset, and channel-auth contract IDs) — balance, deposits,
-          and sends need it.
-        </div>`
-  }
-
     <section class="empty-state" style="margin:1.5rem 0">
       <h2 style="margin:0 0 0.25rem;font-size:1rem">Balance</h2>
       <p style="color:var(--text-muted);font-size:0.82rem;margin-bottom:1rem">
@@ -295,8 +273,7 @@ function paySurface(): HTMLElement {
 
   const loadBalances = async () => {
     if (!channel) {
-      $("#balance-status").textContent =
-        "Balance unavailable until a channel is configured.";
+      $("#balance-status").textContent = "This provider has no active channel.";
       return;
     }
     const statusEl = $("#balance-status");
@@ -547,7 +524,7 @@ export function payUtxoView(): HTMLElement {
         });
         capture("entity_login", { publicKey: getEntityAddress() });
 
-        container.replaceWith(paySurface());
+        container.replaceWith(await paySurface());
       } catch (error) {
         errorEl.textContent = error instanceof Error
           ? error.message

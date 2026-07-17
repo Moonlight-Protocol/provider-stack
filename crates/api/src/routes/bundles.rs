@@ -206,6 +206,35 @@ pub async fn post_submit(
     })))
 }
 
+/// Channels of this PP's active council memberships, exposed to the entity
+/// session — same data the operator dashboard renders, resolved by
+/// `dashboard_pp::load_pp_memberships` (membership row → council-platform
+/// public endpoint). The entity payment surface auto-selects its channel
+/// from here instead of carrying contract IDs in the URL.
+#[get("/provider/entity/channels")]
+pub async fn list_entity_channels(
+    state: web::Data<AppState>,
+    _auth: EntityAuth,
+) -> Result<impl Responder, ApiError> {
+    let memberships = crate::routes::dashboard_pp::load_pp_memberships(&state).await?;
+    let channels: Vec<JsonValue> = memberships
+        .into_iter()
+        .flat_map(|m| {
+            let auth_id = m.channel_auth_id.clone();
+            m.channels.into_iter().map(move |mut c| {
+                if let JsonValue::Object(ref mut map) = c {
+                    map.insert(
+                        "channelAuthId".into(),
+                        JsonValue::String(auth_id.clone()),
+                    );
+                }
+                c
+            })
+        })
+        .collect();
+    Ok(HttpResponse::Ok().json(Data::new(channels)))
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EntityBundlesList {

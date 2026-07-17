@@ -115,6 +115,26 @@ function walletSigner(address: string) {
   };
 }
 
+// ── Channels ───────────────────────────────────────────────────
+
+/**
+ * The PP's channels, resolved server-side from its council membership —
+ * the same data the operator dashboard shows. The surface auto-selects
+ * when there is exactly one.
+ */
+export async function getEntityChannels(): Promise<ChannelIds[]> {
+  const res = await entityFetch("/provider/entity/channels");
+  if (!res.ok) throw new Error(`Channel lookup failed: ${res.status}`);
+  const { data } = await res.json();
+  return (data as Array<Record<string, string>>)
+    .filter((c) => c.channelContractId && c.assetContractId && c.channelAuthId)
+    .map((c) => ({
+      channelContractId: c.channelContractId,
+      assetContractId: c.assetContractId,
+      channelAuthId: c.channelAuthId,
+    }));
+}
+
 // ── Bundle submission / polling ────────────────────────────────
 
 export type BundleStatus =

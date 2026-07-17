@@ -56,7 +56,9 @@ fn membership_status_to_string(s: provider_stack_persistence::CouncilMembershipS
     .to_string()
 }
 
-async fn load_pp_memberships(state: &AppState) -> Result<Vec<PpMembership>, ApiError> {
+pub(crate) async fn load_pp_memberships(
+    state: &AppState,
+) -> Result<Vec<PpMembership>, ApiError> {
     let repo = provider_stack_persistence::CouncilMembershipRepo::new(state.pool.clone());
     let rows = repo.list_active().await?;
     let client = reqwest::Client::builder()
