@@ -36,6 +36,8 @@
     "@moonlight/ui/layout": "https://raw.githubusercontent.com/Moonlight-Protocol/ui/v0.3.1/src/layout/mod.ts",
     "@moonlight/ui/nav": "https://raw.githubusercontent.com/Moonlight-Protocol/ui/v0.3.1/src/nav/mod.ts",
     "@moonlight/ui/stepper": "https://raw.githubusercontent.com/Moonlight-Protocol/ui/v0.3.1/src/stepper/mod.ts",
-    "@moonlight/ui/invite-waitlist": "https://raw.githubusercontent.com/Moonlight-Protocol/ui/v0.3.1/src/invite-waitlist/mod.ts"
+    "@moonlight/ui/invite-waitlist": "https://raw.githubusercontent.com/Moonlight-Protocol/ui/v0.3.1/src/invite-waitlist/mod.ts",
+    "@noble/curves/p256": "jsr:@noble/curves@^1.8.0/p256",
+    "@colibri/core": "jsr:@colibri/core@^0.22.0"
   }
 }

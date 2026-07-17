@@ -118,7 +118,7 @@
         "idb-keyval",
         "ox@0.6.9_typescript@7.0.2",
         "preact@10.24.2",
-        "viem@2.55.2_typescript@7.0.2_zod@3.22.4",
+        "viem",
         "zustand"
       ]
     },
@@ -135,7 +135,7 @@
         "jose",
         "md5",
         "uncrypto",
-        "viem@2.55.2_typescript@7.0.2_zod@3.25.76",
+        "viem",
         "zod@3.25.76"
       ]
     },
@@ -648,7 +648,7 @@
       "dependencies": [
         "big.js",
         "dayjs",
-        "viem@2.55.2_typescript@7.0.2_zod@3.22.4"
+        "viem"
       ]
     },
     "@reown/appkit-controllers@1.8.19_@types+react@19.2.17_typescript@7.0.2": {
@@ -658,7 +658,7 @@
         "@reown/appkit-wallet",
         "@walletconnect/universal-provider",
         "valtio",
-        "viem@2.55.2_typescript@7.0.2_zod@3.22.4"
+        "viem"
       ]
     },
     "@reown/appkit-pay@1.8.19_@types+react@19.2.17_fastestsmallesttextencoderdecoder@1.0.22_typescript@7.0.2": {
@@ -712,7 +712,7 @@
         "@walletconnect/logger@3.0.2",
         "@walletconnect/universal-provider",
         "valtio",
-        "viem@2.55.2_typescript@7.0.2_zod@3.22.4"
+        "viem"
       ],
       "optionalDependencies": [
         "@base-org/account",
@@ -744,7 +744,7 @@
         "bs58@6.0.0",
         "semver@7.7.2",
         "valtio",
-        "viem@2.55.2_typescript@7.0.2_zod@3.22.4"
+        "viem"
       ],
       "optionalDependencies": [
         "@lit/react"
@@ -762,7 +762,7 @@
       "integrity": "sha512-N5p/ulfnnA2Pi2M3YeWjULeWbjo7ei22JwU/IXnhoHzKq3pYCN6ynL9mJBOlvDVv892EgLPCWCOwQk/uBT2v0Q==",
       "dependencies": [
         "@safe-global/safe-gateway-typescript-sdk",
-        "viem@2.55.2_typescript@7.0.2_zod@3.22.4"
+        "viem"
       ]
     },
     "@safe-global/safe-gateway-typescript-sdk@3.23.1": {
@@ -3770,23 +3770,6 @@
         "typescript"
       ]
     },
-    "ox@0.14.30_typescript@7.0.2_zod@3.25.76": {
-      "integrity": "sha512-LI11uu+8iiM1B3CLckgd++YF1a0A2k5wDoM9ZeQMiL21BOzQs6L//BLS6hb1HSEKCyycdDIQLsVQx9MjpcC0hA==",
-      "dependencies": [
-        "@adraffy/ens-normalize",
-        "@noble/ciphers",
-        "@noble/curves@1.9.1",
-        "@noble/hashes@1.8.0",
-        "@scure/bip32",
-        "@scure/bip39",
-        "abitype@1.2.3_typescript@7.0.2_zod@3.25.76",
-        "eventemitter3",
-        "typescript"
-      ],
-      "optionalPeers": [
-        "typescript"
-      ]
-    },
     "ox@0.6.9_typescript@7.0.2": {
       "integrity": "sha512-wi5ShvzE4eOcTwQVsIPdFr+8ycyX+5le/96iAJutaZAvCes1J0+RvpEPg5QDPDiaR0XQQAvZVl7AwqQcINuUug==",
       "dependencies": [
@@ -4404,23 +4387,6 @@
         "typescript"
       ]
     },
-    "viem@2.55.2_typescript@7.0.2_zod@3.25.76": {
-      "integrity": "sha512-XlJeyNAZ96dQfOHlxLTK1FKgtWw/TtxENKNMBSBgxqALjiWiBWrFmSSzwwMivryKnBwkbt5E+90jSCLnVEilLA==",
-      "dependencies": [
-        "@noble/curves@1.9.1",
-        "@noble/hashes@1.8.0",
-        "@scure/bip32",
-        "@scure/bip39",
-        "abitype@1.2.3_typescript@7.0.2_zod@3.25.76",
-        "isows",
-        "ox@0.14.30_typescript@7.0.2_zod@3.25.76",
-        "typescript",
-        "ws@8.21.0"
-      ],
-      "optionalPeers": [
-        "typescript"
-      ]
-    },
     "webidl-conversions@3.0.1": {
       "integrity": "sha512-2JAn3z8AR6rjK8Sm8orRC0h/bcl/DqL7tRPdGZ4I1CjdF+EaMLmYxBHyXuKL849eucPFhvBoxMsflfOb8kxaeQ=="
     },
@@ -4545,8 +4511,10 @@
   },
   "workspace": {
     "dependencies": [
+      "jsr:@colibri/core@0.22",
       "jsr:@luca/esbuild-deno-loader@0.11",
       "jsr:@moonlight/moonlight-sdk@~0.11.3",
+      "jsr:@noble/curves@^1.8.0",
       "jsr:@std/assert@1",
       "jsr:@std/path@1",
       "npm:@creit.tech/stellar-wallets-kit@2.1.0",

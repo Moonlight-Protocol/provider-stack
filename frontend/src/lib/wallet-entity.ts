@@ -88,6 +88,29 @@ export async function signEntityTransaction(xdr: string): Promise<string> {
 }
 
 /**
+ * Sign an arbitrary message with the entity's wallet (SEP-53).
+ * Used to derive the UTXO master seed — same message and mechanism as
+ * moonlight-pay's initMasterSeed.
+ */
+export async function signEntityMessage(message: string): Promise<string> {
+  ensureInit();
+  const address = entityAddress;
+  if (!address) throw new Error("Wallet not connected");
+
+  const result = await StellarWalletsKit.signMessage(message, {
+    address,
+    networkPassphrase: getNetworkPassphrase(),
+  });
+  if (
+    typeof result?.signedMessage !== "string" ||
+    result.signedMessage.length === 0
+  ) {
+    throw new Error("Wallet returned an empty message signature");
+  }
+  return result.signedMessage;
+}
+
+/**
  * Sign a Soroban authorization entry (base64 XDR) with the entity's wallet.
  * Used to authorize channel deposits.
  */

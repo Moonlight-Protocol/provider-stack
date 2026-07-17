@@ -1,23 +1,28 @@
 /**
  * Entity UTXO payment surface at #/pay-utxo.
  *
- * Login: entity SEP-10 against GET/POST /stellar/auth — connect + sign,
- * nothing else. A separate name-based surface lands later at #/pay-name.
+ * Login: entity SEP-10 against GET/POST /stellar/auth (connect + sign),
+ * then one master-seed signature ("Moonlight: Derive server key" — same as
+ * moonlight-pay) so UTXO keys derive deterministically from the wallet.
+ * A separate name-based surface lands later at #/pay-name.
  *
- * Signed in, three sections:
- *   Balance   — session balance + deposit into the channel (one wallet popup)
- *   Request   — generate receiving keys, share the CREATE MLXDRs out of band
- *   Send      — paste receiver MLXDRs, spend session UTXOs (no popup)
+ * Signed in, three sections under the @moonlight/ui nav:
+ *   Balance   — on-chain balance over the derived keys + deposit
+ *   Request   — reserve derived keys, share the CREATE MLXDRs out of band
+ *   Send      — paste receiver MLXDRs, spend funded derived UTXOs (no popup)
  *
  * Isolation contract — same stance as the KYC route (entities/register.ts):
- *   - ZERO persistence: wallet address, entity JWT, and all UTXO keys live
- *     in module-local state only; nothing survives refresh or re-entry.
+ *   - ZERO persistence: address, JWT, seed, and keys live in module-local
+ *     state only; nothing survives refresh. Everything re-derives from the
+ *     wallet on the next visit.
  *   - No session bleed: never reads or writes the operator-auth storage.
- *   - No operator chrome.
  *
- * The channel is provided via query params (#/pay-utxo?channel=C…&asset=C…)
- * — there is no entity-facing channel-discovery endpoint.
+ * The channel comes from query params (#/pay-utxo?channel=&asset=&auth=) —
+ * there is no entity-facing channel-discovery endpoint. Channel-selection
+ * UX is an open item.
  */
+import { renderNav } from "@moonlight/ui/nav";
+import { pageLayout } from "@moonlight/ui/layout";
 import {
   authenticateEntity,
   clearEntityAuth,
@@ -30,7 +35,6 @@ import {
 } from "../lib/wallet-entity.ts";
 import {
   type BundleState,
-  type ChannelConfig,
   DEPOSIT_FEE,
   fromStroops,
   getBundle,
@@ -43,14 +47,19 @@ import {
 } from "../lib/moonlight-client.ts";
 import {
   balance,
-  clearUtxoSession,
-  fundedUtxos,
-  pendingAmount,
-} from "../lib/utxo-session.ts";
+  type ChannelIds,
+  clearDerivation,
+  fundedCount,
+  initEntitySeed,
+  isSeedReady,
+  refreshBalances,
+} from "../lib/utxo-derivation.ts";
 import { capture } from "../lib/analytics.ts";
 import { escapeHtml } from "../lib/dom.ts";
-import { getRouteQuery, onCleanup } from "../lib/router.ts";
+import { getRouteQuery, navigate, onCleanup } from "../lib/router.ts";
 import { startTrace, withSpan } from "../lib/tracer.ts";
+
+declare const __APP_VERSION__: string;
 
 // ── helpers ────────────────────────────────────────────────────
 
@@ -58,12 +67,17 @@ function shortId(id: string): string {
   return id.length > 12 ? `${id.slice(0, 4)}…${id.slice(-4)}` : id;
 }
 
-function readChannelConfig(): ChannelConfig | null {
+function readChannelIds(): ChannelIds | null {
   const q = getRouteQuery();
   const channel = q.get("channel");
   const asset = q.get("asset");
-  if (!channel || !asset) return null;
-  return { channelContractId: channel, assetContractId: asset };
+  const auth = q.get("auth");
+  if (!channel || !asset || !auth) return null;
+  return {
+    channelContractId: channel,
+    assetContractId: asset,
+    channelAuthId: auth,
+  };
 }
 
 /** ui-stepper (Submitted → Processing → Completed) for a bundle status. */
@@ -141,47 +155,57 @@ function pollBundle(
   };
 }
 
+function signOut(): void {
+  clearEntityAuth();
+  clearEntityWallet();
+  clearDerivation();
+  navigate("/pay-utxo");
+  globalThis.dispatchEvent(new HashChangeEvent("hashchange"));
+}
+
 // ── authenticated surface ──────────────────────────────────────
 
 function paySurface(): HTMLElement {
   const sub = getEntityJwtSub();
-  const channel = readChannelConfig();
+  const channel = readChannelIds();
 
-  const container = document.createElement("div");
-  container.className = "container";
-  container.style.maxWidth = "680px";
-  container.innerHTML = `
-    <div style="display:flex;align-items:center;justify-content:space-between;gap:1rem;flex-wrap:wrap;padding:1.25rem 0 1rem;border-bottom:1px solid var(--border);margin-bottom:1.5rem">
-      <h1 style="font-size:1.15rem">Pay (UTXO)</h1>
-      <div style="display:flex;align-items:center;gap:0.75rem;font-size:0.78rem;color:var(--text-muted)">
-        <span class="nav-address">${escapeHtml(shortId(sub || ""))}</span>
-        <button id="signout-btn" class="btn-link">Sign out</button>
-      </div>
-    </div>
+  const nav = renderNav({
+    brand: "Pay (UTXO)",
+    version: __APP_VERSION__,
+    links: [],
+    address: sub,
+    onLogout: signOut,
+  });
 
+  const content = document.createElement("div");
+  content.className = "container";
+  content.style.maxWidth = "680px";
+  content.innerHTML = `
     ${
     channel
       ? ""
-      : `<div class="membership-banner revoked" style="position:static;margin-bottom:1.5rem">
+      : `<div class="membership-banner revoked" style="position:static;margin:1.5rem 0">
           No channel configured. Open this page as
-          <span class="mono">#/pay-utxo?channel=&lt;CHANNEL_CONTRACT_ID&gt;&amp;asset=&lt;ASSET_CONTRACT_ID&gt;</span>
-          — deposits and sends need it.
+          <span class="mono">#/pay-utxo?channel=…&amp;asset=…&amp;auth=…</span>
+          (channel, asset, and channel-auth contract IDs) — balance, deposits,
+          and sends need it.
         </div>`
   }
 
-    <section class="empty-state" style="margin-bottom:1.5rem">
+    <section class="empty-state" style="margin:1.5rem 0">
       <h2 style="margin:0 0 0.25rem;font-size:1rem">Balance</h2>
       <p style="color:var(--text-muted);font-size:0.82rem;margin-bottom:1rem">
-        Funds this session controls inside the privacy channel.
+        Your funds in the privacy channel, from the keys derived off your
+        wallet — the same set every visit.
       </p>
       <div class="stats-row" style="margin:0 0 1.25rem">
         <div class="stat-card active">
-          <span class="stat-label">Session balance</span>
-          <span class="stat-value" id="balance-value" style="font-variant-numeric:tabular-nums">0 XLM</span>
+          <span class="stat-label">Channel balance</span>
+          <span class="stat-value" id="balance-value" style="font-variant-numeric:tabular-nums">—</span>
         </div>
         <div class="stat-card">
-          <span class="stat-label">Unspent UTXOs</span>
-          <span class="stat-value" id="utxo-count">0</span>
+          <span class="stat-label">Funded UTXOs</span>
+          <span class="stat-value" id="utxo-count">—</span>
         </div>
         <div class="stat-card">
           <span class="stat-label">Channel</span>
@@ -190,6 +214,7 @@ function paySurface(): HTMLElement {
   }</span>
         </div>
       </div>
+      <p id="balance-status" class="hint-text" style="margin:0 0 1rem"></p>
       <div class="form-row">
         <div class="form-group" style="margin-bottom:0">
           <label for="deposit-amount">Amount to deposit (XLM)</label>
@@ -198,18 +223,22 @@ function paySurface(): HTMLElement {
         <button id="deposit-btn" class="btn-primary" ${
     channel ? "" : "disabled"
   }>Deposit</button>
+        <button id="refresh-btn" class="btn-link" ${
+    channel ? "" : "disabled"
+  }>Refresh</button>
       </div>
       <p class="hint-text">The wallet asks for one signature authorizing the
       transfer into the channel (fee ${fromStroops(DEPOSIT_FEE)} XLM). The
-      deposit lands on a key generated for this session.</p>
+      deposit lands on the next free derived key.</p>
       <div id="deposit-status"></div>
     </section>
 
     <section class="empty-state" style="margin-bottom:1.5rem">
       <h2 style="margin:0 0 0.25rem;font-size:1rem">Request transfer</h2>
       <p style="color:var(--text-muted);font-size:0.82rem;margin-bottom:1rem">
-        Generate receiving keys and share them with whoever is paying you —
-        over any channel you like.
+        Reserve receiving keys and share them with whoever is paying you —
+        over any channel you like. Keys re-derive from your wallet, so there
+        is nothing to back up.
       </p>
       <div class="form-row">
         <div class="form-group" style="margin-bottom:0">
@@ -232,19 +261,14 @@ function paySurface(): HTMLElement {
           <span class="hint-text" style="margin:0">Public — safe to share.</span>
           <button id="copy-blob-btn" class="btn-link">Copy</button>
         </div>
-        <div style="display:flex;justify-content:space-between;align-items:center;gap:0.5rem;flex-wrap:wrap;margin-top:0.5rem">
-          <span class="hint-text" style="margin:0">Secret keys — keep them;
-          they leave with this session.</span>
-          <button id="copy-secrets-btn" class="btn-link">Copy secrets</button>
-        </div>
       </div>
     </section>
 
-    <section class="empty-state">
+    <section class="empty-state" style="margin-bottom:3rem">
       <h2 style="margin:0 0 0.25rem;font-size:1rem">Send</h2>
       <p style="color:var(--text-muted);font-size:0.82rem;margin-bottom:1rem">
-        Paste the receiving keys someone shared with you. Sends spend this
-        session's UTXOs — deposit first if the balance is short.
+        Paste the receiving keys someone shared with you. Sends spend your
+        funded UTXOs — deposit first if the balance is short.
       </p>
       <div class="form-group">
         <label for="send-paste">Receiving keys from the recipient</label>
@@ -259,51 +283,69 @@ function paySurface(): HTMLElement {
     </section>
   `;
 
+  const wrapper = pageLayout(nav, content);
   const $ = <T extends HTMLElement>(sel: string) =>
-    container.querySelector(sel) as T;
+    content.querySelector(sel) as T;
 
-  // ── Balance / deposit ──
-  const refreshBalance = () => {
-    $("#balance-value").textContent = `${fromStroops(balance())} XLM` +
-      (pendingAmount() > 0n
-        ? ` (+${fromStroops(pendingAmount())} pending)`
-        : "");
-    $("#utxo-count").textContent = String(fundedUtxos().length);
+  // ── Balance: derive keys + on-chain refresh ──
+  const refreshUI = () => {
+    $("#balance-value").textContent = `${fromStroops(balance())} XLM`;
+    $("#utxo-count").textContent = String(fundedCount());
   };
-  refreshBalance();
 
-  $("#signout-btn").addEventListener("click", () => {
-    clearEntityAuth();
-    clearEntityWallet();
-    clearUtxoSession();
-    container.replaceWith(payUtxoView());
-  });
+  const loadBalances = async () => {
+    if (!channel) {
+      $("#balance-status").textContent =
+        "Balance unavailable until a channel is configured.";
+      return;
+    }
+    const statusEl = $("#balance-status");
+    try {
+      if (!isSeedReady()) {
+        statusEl.textContent =
+          "Sign the key-derivation message in your wallet…";
+        // Freighter rejects back-to-back popups without a pause (same
+        // pattern as moonlight-pay's login → initMasterSeed chain).
+        await new Promise((r) => setTimeout(r, 1000));
+        await initEntitySeed();
+      }
+      statusEl.textContent = "Checking the channel for your UTXOs…";
+      await refreshBalances(channel);
+      statusEl.textContent = "";
+      refreshUI();
+    } catch (e) {
+      statusEl.textContent = "";
+      $("#balance-value").textContent = "—";
+      const msg = e instanceof Error ? e.message : String(e);
+      $("#deposit-status").innerHTML = stepperHtml(null, msg);
+    }
+  };
+  loadBalances();
 
+  $("#refresh-btn").addEventListener("click", () => loadBalances());
+
+  // ── Deposit ──
   $("#deposit-btn").addEventListener("click", async () => {
     if (!channel) return;
     const btn = $<HTMLButtonElement>("#deposit-btn");
     const statusEl = $("#deposit-status");
     btn.disabled = true;
     try {
-      const amount = toStroops(
-        $<HTMLInputElement>("#deposit-amount").value,
-      );
+      if (!isSeedReady()) await loadBalances();
+      const amount = toStroops($<HTMLInputElement>("#deposit-amount").value);
       if (amount <= 0n) throw new Error("Enter a deposit amount");
       statusEl.innerHTML =
         `<p class="hint-text">Waiting for the wallet signature…</p>`;
-      const { bundleId, utxo } = await submitDeposit(amount, channel);
+      const bundleId = await submitDeposit(amount, channel);
       capture("entity_deposit_submitted", { bundleId });
-      refreshBalance();
       const stop = pollBundle(bundleId, (state) => {
         statusEl.innerHTML = stepperHtml(state);
-        if (state.status === "COMPLETED") {
-          utxo.status = "FUNDED";
-          refreshBalance();
+        if (
+          state.status === "COMPLETED" || state.status === "FAILED" ||
+          state.status === "EXPIRED"
+        ) {
           btn.disabled = false;
-        } else if (state.status === "FAILED" || state.status === "EXPIRED") {
-          utxo.status = "SPENT"; // never fund a failed deposit
-          refreshBalance();
-          btn.disabled = false;
+          if (state.status === "COMPLETED") loadBalances();
         }
       }, (err) => {
         statusEl.innerHTML = stepperHtml(null, err);
@@ -324,10 +366,11 @@ function paySurface(): HTMLElement {
     const errEl = $("#request-error");
     errEl.hidden = true;
     try {
+      if (!isSeedReady()) await loadBalances();
       const amount = toStroops($<HTMLInputElement>("#request-amount").value);
       if (amount <= 0n) throw new Error("Enter the amount to request");
       const count = Number($<HTMLInputElement>("#request-count").value);
-      const { mlxdrs, secretsHex } = await prepareReceive(amount, count);
+      const mlxdrs = await prepareReceive(amount, count);
       $<HTMLTextAreaElement>("#request-blob").value = mlxdrs.join("\n");
       $("#request-output").hidden = false;
       capture("entity_receive_generated", { count });
@@ -335,10 +378,6 @@ function paySurface(): HTMLElement {
       $("#copy-blob-btn").onclick = () => {
         navigator.clipboard.writeText(mlxdrs.join("\n"));
         $("#copy-blob-btn").textContent = "Copied";
-      };
-      $("#copy-secrets-btn").onclick = () => {
-        navigator.clipboard.writeText(secretsHex.join("\n"));
-        $("#copy-secrets-btn").textContent = "Copied";
       };
     } catch (e) {
       errEl.textContent = e instanceof Error ? e.message : String(e);
@@ -362,7 +401,7 @@ function paySurface(): HTMLElement {
         fromStroops(parsed.total)
       } XLM to ${parsed.ops.length} key(s) + ${
         fromStroops(SEND_FEE)
-      } fee — session balance ${fromStroops(have)} XLM${
+      } fee — balance ${fromStroops(have)} XLM${
         have < total ? " (insufficient — deposit first)" : ""
       }`;
     } catch (e) {
@@ -378,26 +417,20 @@ function paySurface(): HTMLElement {
     errEl.hidden = true;
     btn.disabled = true;
     try {
+      if (!isSeedReady()) await loadBalances();
       const parsed = parseReceiverOps(
         $<HTMLTextAreaElement>("#send-paste").value,
       );
-      const { bundleId, change, spent } = await submitSend(parsed, channel);
+      const { bundleId } = await submitSend(parsed, channel);
       capture("entity_send_submitted", { bundleId });
-      // Optimistically mark inputs spent so a second send can't reuse them.
-      for (const u of spent) u.status = "SPENT";
-      refreshBalance();
       const stop = pollBundle(bundleId, (state) => {
         statusEl.innerHTML = stepperHtml(state);
-        if (state.status === "COMPLETED") {
-          if (change) change.status = "FUNDED";
-          refreshBalance();
+        if (
+          state.status === "COMPLETED" || state.status === "FAILED" ||
+          state.status === "EXPIRED"
+        ) {
           btn.disabled = false;
-        } else if (state.status === "FAILED" || state.status === "EXPIRED") {
-          // Spends didn't land — the inputs are still unspent on-chain.
-          for (const u of spent) u.status = "FUNDED";
-          if (change) change.status = "SPENT";
-          refreshBalance();
-          btn.disabled = false;
+          loadBalances();
         }
       }, (err) => {
         statusEl.innerHTML = stepperHtml(null, err);
@@ -411,10 +444,10 @@ function paySurface(): HTMLElement {
     }
   });
 
-  return container;
+  return wrapper;
 }
 
-// ── login flow (unchanged) ─────────────────────────────────────
+// ── login flow ─────────────────────────────────────────────────
 
 export function payUtxoView(): HTMLElement {
   // Reset any entity state from a prior visit to this route in the same tab
@@ -422,7 +455,7 @@ export function payUtxoView(): HTMLElement {
   // authenticated surface is only ever reached via replaceWith after login.
   clearEntityAuth();
   clearEntityWallet();
-  clearUtxoSession();
+  clearDerivation();
 
   const container = document.createElement("div");
   container.className = "login-container";
@@ -461,6 +494,7 @@ export function payUtxoView(): HTMLElement {
     () => {
       clearEntityWallet();
       clearEntityAuth();
+      clearDerivation();
       connectStep.hidden = false;
       signinStep.hidden = true;
       errorEl.hidden = true;

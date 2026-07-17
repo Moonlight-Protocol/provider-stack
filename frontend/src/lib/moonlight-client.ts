@@ -2,19 +2,22 @@
  * Privacy-channel operations for the entity payment surface (#/pay-utxo).
  *
  * Mirrors the reference clients (local-dev/lib/client/{deposit,send,receive}.ts)
- * with the wallet in place of a raw Keypair:
+ * with the wallet in place of a raw Keypair, and moonlight-pay's derived
+ * UTXO keys (lib/utxo-derivation.ts) in place of an account handler:
  *   - Deposit: DEPOSIT (Ed25519-authorized via the wallet's signAuthEntry)
- *     + CREATE at a fresh session key. Bundle = [deposit, create].
- *   - Request: fresh session key(s) → CREATE op(s), shared as MLXDR strings
- *     out of band. No submission.
- *   - Send: parse receiver CREATE MLXDRs, SPEND session UTXOs (P256-signed
- *     in memory, no wallet popup) + change CREATE. Bundle = [creates, spends].
+ *     + CREATE at the next free derived key. Bundle = [deposit, create].
+ *   - Request: reserve free derived key(s) → CREATE op(s), shared as MLXDR
+ *     strings out of band. Re-derivable — no secret custody problem.
+ *   - Send: parse receiver CREATE MLXDRs, SPEND funded derived UTXOs
+ *     (P256-signed in memory, no wallet popup) + change CREATE at a free
+ *     derived key. Bundle = [creates, spends].
  *
  * Wire shape (crates/api/src/routes/bundles.rs):
  *   POST /provider/entity/bundles { operationsMLXDR, channelContractId }
  */
 import { MoonlightOperation } from "@moonlight/moonlight-sdk";
-import { xdr } from "stellar-sdk";
+import { authorizeEntry, type xdr } from "stellar-sdk";
+import { Buffer } from "buffer";
 import { RPC_URL } from "./config.ts";
 import { entityFetch } from "./entity-auth.ts";
 import {
@@ -24,20 +27,15 @@ import {
 } from "./wallet-entity.ts";
 import { getNetworkPassphrase } from "./wallet.ts";
 import {
-  addOwnUtxo,
-  generateUtxoKeypair,
-  selectUtxos,
-  type SessionUtxo,
-} from "./utxo-session.ts";
+  type ChannelIds,
+  type DerivedUtxo,
+  reserveFreeUtxos,
+  selectFunded,
+} from "./utxo-derivation.ts";
 
 // LOW-entropy fees, matching the reference clients (local-dev/lib/client).
 export const DEPOSIT_FEE = 500_000n; // 0.05 XLM in stroops
 export const SEND_FEE = 1_000_000n; // 0.1 XLM in stroops
-
-export interface ChannelConfig {
-  channelContractId: string;
-  assetContractId: string;
-}
 
 // ── Amounts ────────────────────────────────────────────────────
 
@@ -90,15 +88,29 @@ function walletSigner(address: string) {
     },
     signTransaction: (tx: string | { toXDR(): string }) =>
       signEntityTransaction(typeof tx === "string" ? tx : tx.toXDR()),
-    signSorobanAuthEntry: async (
-      entry: string | { toXDR(format: "base64"): string },
-      _validUntil: number,
+    // Freighter's signAuthEntry signs the HashIdPreimage (and returns just
+    // the signature), so the entry is authorized via stellar-sdk's
+    // authorizeEntry with the wallet as the signing callback. authorizeEntry
+    // verifies the returned signature against the depositor's key — a
+    // malformed wallet response fails loudly here.
+    signSorobanAuthEntry: (
+      entry: xdr.SorobanAuthorizationEntry,
+      validUntil: number,
       networkPassphrase: string,
-    ) => {
-      const b64 = typeof entry === "string" ? entry : entry.toXDR("base64");
-      const signed = await signEntityAuthEntry(b64, networkPassphrase);
-      return xdr.SorobanAuthorizationEntry.fromXDR(signed, "base64");
-    },
+    ) =>
+      authorizeEntry(
+        entry,
+        async (preimage: xdr.HashIdPreimage) =>
+          Buffer.from(
+            await signEntityAuthEntry(
+              preimage.toXDR("base64"),
+              networkPassphrase,
+            ),
+            "base64",
+          ),
+        validUntil,
+        networkPassphrase,
+      ),
     signsFor: (target: string) => target === address,
   };
 }
@@ -151,25 +163,20 @@ export async function getBundle(bundleId: string): Promise<BundleState> {
 
 // ── Deposit ────────────────────────────────────────────────────
 
-export interface SubmittedDeposit {
-  bundleId: string;
-  utxo: SessionUtxo;
-}
-
 /**
  * Deposit `amount` stroops into the channel. One wallet popup (the Soroban
- * auth entry over the SAC transfer). The deposited amount lands on a fresh
- * session UTXO; the fee difference stays with the provider.
+ * auth entry over the SAC transfer). The deposited amount lands on the next
+ * free derived key; the fee difference stays with the provider.
  */
 export async function submitDeposit(
   amount: bigint,
-  channel: ChannelConfig,
-): Promise<SubmittedDeposit> {
+  channel: ChannelIds,
+): Promise<string> {
   const account = getEntityAddress();
   if (!account) throw new Error("Wallet not connected");
 
-  const keypair = await generateUtxoKeypair();
-  const createOp = MoonlightOperation.create(keypair.publicKey, amount);
+  const [target] = await reserveFreeUtxos(1);
+  const createOp = MoonlightOperation.create(target.keypair.publicKey, amount);
 
   const expiration = (await getLatestLedger()) + 1000;
 
@@ -187,49 +194,36 @@ export async function submitDeposit(
       getNetworkPassphrase(),
     );
 
-  const bundleId = await submitBundle(
+  return await submitBundle(
     [depositOp.toMLXDR(), createOp.toMLXDR()],
     channel.channelContractId,
   );
-  const utxo = addOwnUtxo(keypair, amount);
-  return { bundleId, utxo };
 }
 
 // ── Request (receive) ──────────────────────────────────────────
 
-export interface ReceiveRequest {
-  mlxdrs: string[];
-  secretsHex: string[];
-}
-
 /**
- * Generate `count` receiving CREATE ops totalling `amount`, split evenly
- * (remainder on the last). Returns the MLXDR strings to share with the payer
- * and the raw P256 secrets the recipient must keep to ever spend the funds.
+ * Reserve `count` free derived keys and build receiving CREATE ops
+ * totalling `amount`, split evenly (remainder on the last). Returns the
+ * MLXDR strings to share with the payer. Keys are re-derivable from the
+ * wallet — nothing to back up.
  */
 export async function prepareReceive(
   amount: bigint,
   count: number,
-): Promise<ReceiveRequest> {
+): Promise<string[]> {
   if (count < 1 || !Number.isInteger(count)) {
     throw new Error("Key count must be a positive integer");
   }
   if (amount < BigInt(count)) {
     throw new Error("Amount too small to split across the requested keys");
   }
+  const targets = await reserveFreeUtxos(count);
   const per = amount / BigInt(count);
-  const mlxdrs: string[] = [];
-  const secretsHex: string[] = [];
-  for (let i = 0; i < count; i++) {
-    const keypair = await generateUtxoKeypair();
+  return targets.map((t, i) => {
     const share = i === count - 1 ? amount - per * BigInt(count - 1) : per;
-    mlxdrs.push(MoonlightOperation.create(keypair.publicKey, share).toMLXDR());
-    secretsHex.push(
-      Array.from(keypair.privateKey, (b) => b.toString(16).padStart(2, "0"))
-        .join(""),
-    );
-  }
-  return { mlxdrs, secretsHex };
+    return MoonlightOperation.create(t.keypair.publicKey, share).toMLXDR();
+  });
 }
 
 // ── Send ───────────────────────────────────────────────────────
@@ -260,26 +254,25 @@ export function parseReceiverOps(pasted: string): ParsedReceiverOps {
 
 export interface SubmittedSend {
   bundleId: string;
-  change: SessionUtxo | null;
-  spent: SessionUtxo[];
+  spent: DerivedUtxo[];
 }
 
 /**
- * Send to the receiver's CREATE ops by spending session UTXOs. No wallet
- * popup — SPENDs are signed with the in-memory P256 keys. Bundle order
- * matches the reference client: CREATEs first, then SPENDs.
+ * Send to the receiver's CREATE ops by spending funded derived UTXOs. No
+ * wallet popup — SPENDs are signed with the in-memory P256 keys. Bundle
+ * order matches the reference client: CREATEs first, then SPENDs.
  */
 export async function submitSend(
   receivers: ParsedReceiverOps,
-  channel: ChannelConfig,
+  channel: ChannelIds,
 ): Promise<SubmittedSend> {
   const totalToSpend = receivers.total + SEND_FEE;
-  const selection = selectUtxos(totalToSpend);
+  const selection = selectFunded(totalToSpend);
   if (!selection) {
     throw new Error(
-      `Insufficient session balance: need ${
-        fromStroops(totalToSpend)
-      } XLM (incl. ${fromStroops(SEND_FEE)} fee)`,
+      `Insufficient balance: need ${fromStroops(totalToSpend)} XLM (incl. ${
+        fromStroops(SEND_FEE)
+      } fee)`,
     );
   }
 
@@ -287,13 +280,14 @@ export async function submitSend(
     MoonlightOperation.create(o.publicKey, o.amount)
   );
 
-  let change: SessionUtxo | null = null;
   if (selection.change > 0n) {
-    const changeKeypair = await generateUtxoKeypair();
+    const [changeTarget] = await reserveFreeUtxos(1);
     createOps.push(
-      MoonlightOperation.create(changeKeypair.publicKey, selection.change),
+      MoonlightOperation.create(
+        changeTarget.keypair.publicKey,
+        selection.change,
+      ),
     );
-    change = addOwnUtxo(changeKeypair, selection.change);
   }
 
   const expiration = (await getLatestLedger()) + 1000;
@@ -304,6 +298,7 @@ export async function submitSend(
     for (const createOp of createOps) {
       spendOp = spendOp.addCondition(createOp.toCondition());
     }
+    utxo.reserved = true;
     spendOps.push(
       await spendOp.signWithUTXO(
         utxo.keypair,
@@ -320,5 +315,5 @@ export async function submitSend(
     ],
     channel.channelContractId,
   );
-  return { bundleId, change, spent: selection.selected };
+  return { bundleId, spent: selection.selected };
 }
