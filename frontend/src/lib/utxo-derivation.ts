@@ -144,21 +144,36 @@ function channelClient(ids: ChannelIds): PrivacyChannel {
   );
 }
 
-/** Re-read utxo_balances for every derived key. */
+/**
+ * Re-read utxo_balances across derived keys, extending the derived set with
+ * a gap limit: keep scanning further batches until MIN_SCAN_BATCHES have
+ * been read AND the latest batch holds no funded key. The contract returns
+ * -1 for keys that never existed — that counts as unfunded/free, not as a
+ * balance.
+ */
+const MIN_SCAN_BATCHES = 3;
+
 export async function refreshBalances(ids: ChannelIds): Promise<void> {
-  if (derived.length === 0) await deriveBatch();
   const client = channelClient(ids);
-  const balances = await client.read({
-    // deno-lint-ignore no-explicit-any
-    method: "utxo_balances" as any,
-    methodArgs: {
-      utxos: derived.map((d) => Buffer.from(d.keypair.publicKey)),
-    },
-    // deno-lint-ignore no-explicit-any
-  } as any) as bigint[];
-  balances.forEach((b, i) => {
-    derived[i].balance = b ?? 0n;
-  });
+  let batch = 0;
+  while (true) {
+    while (derived.length < (batch + 1) * BATCH_SIZE) await deriveBatch();
+    const slice = derived.slice(batch * BATCH_SIZE, (batch + 1) * BATCH_SIZE);
+    const balances = await client.read({
+      // deno-lint-ignore no-explicit-any
+      method: "utxo_balances" as any,
+      methodArgs: {
+        utxos: slice.map((d) => Buffer.from(d.keypair.publicKey)),
+      },
+      // deno-lint-ignore no-explicit-any
+    } as any) as bigint[];
+    balances.forEach((b, i) => {
+      slice[i].balance = b ?? 0n;
+    });
+    const batchFunded = slice.some((d) => d.balance > 0n);
+    batch++;
+    if (batch >= MIN_SCAN_BATCHES && !batchFunded) return;
+  }
 }
 
 // ── selection ──────────────────────────────────────────────────
@@ -176,11 +191,12 @@ export function fundedCount(): number {
   return derived.filter((d) => d.balance > 0n).length;
 }
 
-/** Reserve `n` unused keys (balance 0, not already handed out). */
+/** Reserve `n` unused keys (no balance — 0 or the contract's -1 "does not
+ * exist" marker — and not already handed out). */
 export async function reserveFreeUtxos(n: number): Promise<DerivedUtxo[]> {
   const out: DerivedUtxo[] = [];
   while (out.length < n) {
-    const free = derived.find((d) => d.balance === 0n && !d.reserved);
+    const free = derived.find((d) => d.balance <= 0n && !d.reserved);
     if (!free) {
       await deriveBatch();
       continue;
