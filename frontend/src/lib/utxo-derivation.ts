@@ -73,6 +73,24 @@ export async function initEntitySeed(): Promise<void> {
   derived = [];
 }
 
+/**
+ * Wrap a raw P-256 scalar in a PKCS8 envelope — the SDK's signPayload
+ * imports the key as pkcs8 (same wrapper as moonlight-pay's
+ * selfcustodial-payment.ts buildPkcs8P256).
+ */
+function pkcs8P256(rawPrivateKey: Uint8Array): Uint8Array {
+  // deno-fmt-ignore
+  const header = new Uint8Array([
+    0x30, 0x41, 0x02, 0x01, 0x00, 0x30, 0x13, 0x06, 0x07, 0x2a, 0x86, 0x48,
+    0xce, 0x3d, 0x02, 0x01, 0x06, 0x08, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03,
+    0x01, 0x07, 0x04, 0x27, 0x30, 0x25, 0x02, 0x01, 0x01, 0x04, 0x20,
+  ]);
+  const out = new Uint8Array(header.length + 32);
+  out.set(header);
+  out.set(rawPrivateKey, header.length);
+  return out;
+}
+
 async function deriveP256(
   seed: Uint8Array,
 ): Promise<{ privateKey: Uint8Array; publicKey: Uint8Array }> {
@@ -95,12 +113,13 @@ async function deriveP256(
     expandKey,
     384,
   );
-  const privateKey = new Uint8Array(expanded).slice(0, 32);
+  const raw = new Uint8Array(expanded).slice(0, 32);
   const { p256 } = await import("@noble/curves/p256");
   const publicKey = new Uint8Array(
-    p256.ProjectivePoint.fromPrivateKey(privateKey).toRawBytes(false),
+    p256.ProjectivePoint.fromPrivateKey(raw).toRawBytes(false),
   );
-  return { privateKey, publicKey };
+  // signPayload imports the key as PKCS8, not as a raw scalar.
+  return { privateKey: pkcs8P256(raw), publicKey };
 }
 
 async function deriveIndex(index: number): Promise<DerivedUtxo> {
