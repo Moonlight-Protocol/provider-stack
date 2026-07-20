@@ -1,8 +1,11 @@
 /**
  * Deterministic UTXO keys for the entity payment surface (#/pay-utxo).
  *
- * Derivation matches moonlight-pay's self-custodial flow exactly:
- *   - master seed = SHA-256(signMessage("Moonlight: Derive server key"))
+ * The seed is client-only: the wallet's signature never leaves this module,
+ * and only the client can regenerate it — it exists to generate UTXO keys
+ * and to find the balance by sweeping the derived keys in index order.
+ * Derivation mechanism matches moonlight-pay's self-custodial flow:
+ *   - master seed = SHA-256(signMessage(SEED_MESSAGE))
  *     (moonlight-pay wallet.ts initMasterSeed / wallet-state.ts)
  *   - per-index key = HKDF-SHA256(SHA-256(seed || String(index)),
  *     info "moonlight-p256") → first 32 bytes → P-256 keypair
@@ -21,7 +24,7 @@ import { HORIZON_URL, RPC_URL } from "./config.ts";
 import { getNetworkPassphrase } from "./wallet.ts";
 import { signEntityMessage } from "./wallet-entity.ts";
 
-export const SEED_MESSAGE = "Moonlight: Derive server key";
+export const SEED_MESSAGE = "Moonlight: Derive UTXO seed";
 const BATCH_SIZE = 10;
 
 export interface ChannelIds {

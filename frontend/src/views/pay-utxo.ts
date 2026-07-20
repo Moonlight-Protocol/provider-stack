@@ -2,8 +2,10 @@
  * Entity UTXO payment surface at #/pay-utxo.
  *
  * Login: entity SEP-10 against GET/POST /stellar/auth (connect + sign),
- * then one master-seed signature ("Moonlight: Derive server key" — same as
- * moonlight-pay) so UTXO keys derive deterministically from the wallet.
+ * then one master-seed signature ("Moonlight: Derive UTXO seed" — the
+ * client-only seed that generates UTXO keys and recovers the balance by
+ * sweeping them in index order) so keys derive deterministically from the
+ * wallet.
  * A separate name-based surface lands later at #/pay-name.
  *
  * Signed in, three sections under the @moonlight/ui nav:
