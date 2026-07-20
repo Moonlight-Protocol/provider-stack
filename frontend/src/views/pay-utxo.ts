@@ -280,13 +280,11 @@ async function paySurface(): Promise<HTMLElement> {
     }
     const statusEl = $("#balance-status");
     try {
+      // The seed derives at sign-in; this surface never raises a wallet
+      // popup of its own accord.
       if (!isSeedReady()) {
-        statusEl.textContent =
-          "Sign the key-derivation message in your wallet…";
-        // Freighter rejects back-to-back popups without a pause (same
-        // pattern as moonlight-pay's login → initMasterSeed chain).
-        await new Promise((r) => setTimeout(r, 1000));
-        await initEntitySeed();
+        statusEl.textContent = "No derived keys — sign out and back in.";
+        return;
       }
       statusEl.textContent = "Checking the channel for your UTXOs…";
       await refreshBalances(channel);
@@ -523,6 +521,14 @@ export function payUtxoView(): HTMLElement {
         await withSpan("entity.login", traceId, async () => {
           btn.textContent = "Authenticating...";
           await authenticateEntity();
+          // Seed derivation is part of the login ceremony: both signatures
+          // belong to the one user action ("Sign In"), never to a popup the
+          // page raises on its own later — same as the other apps' login →
+          // initMasterSeed chain. Freighter rejects back-to-back popups
+          // without a pause.
+          btn.textContent = "Deriving keys...";
+          await new Promise((r) => setTimeout(r, 1000));
+          await initEntitySeed();
         });
         capture("entity_login", { publicKey: getEntityAddress() });
 
