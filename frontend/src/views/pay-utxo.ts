@@ -201,9 +201,10 @@ async function paySurface(): Promise<HTMLElement> {
   const kycBannerHtml = kycOk ? "" : (() => {
     const href = registrationUrl(kyc?.providerPublicKey ?? "");
     return `<section class="empty-state" style="margin:1.5rem 0">
-      <p class="error-text" style="margin:0">You cannot operate until you
+      <h2 style="margin:0 0 0.25rem;font-size:1rem">KYC/KYB</h2>
+      <p style="color:var(--text);margin:0">You cannot operate until you
       provide your KYC/KYB info. Complete the registration form:
-      <a href="${href}" target="_blank" rel="noopener">${href}</a></p>
+      <a href="${href}" target="_blank" rel="noopener">register</a></p>
     </section>`;
   })();
 
@@ -267,27 +268,22 @@ async function paySurface(): Promise<HTMLElement> {
     <section class="empty-state" style="margin-bottom:1.5rem">
       <h2 style="margin:0 0 0.25rem;font-size:1rem">Send</h2>
       <p style="color:var(--text-muted);font-size:0.82rem;margin-bottom:1rem">
-        Paste the receiving keys someone shared with you. Sends spend your
-        funded UTXOs — deposit first if the balance is short.
+        Use the payment code to send a transfer.
       </p>
-      <div class="form-group">
-        <label for="send-paste">Receiving keys from the recipient</label>
-        <textarea id="send-paste" rows="4" placeholder="One CREATE operation per line" style="width:100%;padding:0.6rem 0.75rem;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:0.72rem;font-family:var(--font-mono);resize:vertical"></textarea>
+      <div class="form-row">
+        <div class="form-group" style="margin-bottom:0">
+          <label for="send-code">Payment code</label>
+          <input id="send-code" placeholder="Paste the payment code" />
+        </div>
+        <button id="send-btn" class="btn-primary" disabled>Send</button>
       </div>
-      <div id="send-summary" class="hint-text" style="margin:0 0 1rem"></div>
-      <button id="send-btn" class="btn-primary btn-wide" ${
-    channel && kycOk ? "" : "disabled"
-  }>Send</button>
       <p id="send-error" class="error-text" style="margin-top:0.75rem" hidden></p>
       <div id="send-status"></div>
     </section>
 
     <section class="empty-state" style="margin-bottom:3rem">
       <h2 style="margin:0 0 0.25rem;font-size:1rem">Withdraw</h2>
-      <p style="color:var(--text-muted);font-size:0.82rem;margin-bottom:1rem">
-        Move funds out of the channel, back to your connected wallet.
-      </p>
-      <div class="form-row">
+      <div class="form-row" style="margin:0.5rem 0 0">
         <div class="form-group" style="margin-bottom:0;max-width:160px">
           <label for="withdraw-asset">Asset</label>
           <select id="withdraw-asset" style="width:100%;padding:0.6rem 0.75rem;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text)"></select>
@@ -500,7 +496,8 @@ async function paySurface(): Promise<HTMLElement> {
       const key = `${assetSelect.value}|${amount}|${count}`;
       if (lastRequest.key !== key) {
         const mlxdrs = await prepareReceive(amount, count);
-        lastRequest = { key, code: mlxdrs.join("\n") };
+        // Single line: the code must survive a paste into the Send input.
+        lastRequest = { key, code: mlxdrs.join(" ") };
         capture("entity_receive_generated", { count });
       }
       await navigator.clipboard.writeText(lastRequest.code);
@@ -517,40 +514,30 @@ async function paySurface(): Promise<HTMLElement> {
   });
 
   // ── Send ──
-  const summaryEl = $("#send-summary");
-  $("#send-paste").addEventListener("input", () => {
-    const pasted = $<HTMLTextAreaElement>("#send-paste").value.trim();
-    if (!pasted) {
-      summaryEl.textContent = "";
-      return;
+  const sendBtn = $<HTMLButtonElement>("#send-btn");
+  const syncSendBtn = () => {
+    let ok = !!channel && kycOk;
+    if (ok) {
+      try {
+        parseReceiverOps($<HTMLInputElement>("#send-code").value);
+      } catch {
+        ok = false;
+      }
     }
-    try {
-      const parsed = parseReceiverOps(pasted);
-      const total = parsed.total + SEND_FEE;
-      const have = balance();
-      summaryEl.textContent = `Sending ${
-        fromStroops(parsed.total)
-      } XLM to ${parsed.ops.length} key(s) + ${
-        fromStroops(SEND_FEE)
-      } fee — balance ${fromStroops(have)} XLM${
-        have < total ? " (insufficient — deposit first)" : ""
-      }`;
-    } catch (e) {
-      summaryEl.textContent = e instanceof Error ? e.message : String(e);
-    }
-  });
+    sendBtn.disabled = !ok;
+  };
+  $("#send-code").addEventListener("input", syncSendBtn);
 
-  $("#send-btn").addEventListener("click", async () => {
+  sendBtn.addEventListener("click", async () => {
     if (!channel || !kycOk) return;
-    const btn = $<HTMLButtonElement>("#send-btn");
     const errEl = $("#send-error");
     const statusEl = $("#send-status");
     errEl.hidden = true;
-    btn.disabled = true;
+    sendBtn.disabled = true;
     try {
       if (!isSeedReady()) await loadBalances();
       const parsed = parseReceiverOps(
-        $<HTMLTextAreaElement>("#send-paste").value,
+        $<HTMLInputElement>("#send-code").value,
       );
       const { bundleId } = await submitSend(parsed, channel);
       capture("entity_send_submitted", { bundleId });
@@ -560,12 +547,12 @@ async function paySurface(): Promise<HTMLElement> {
           state.status === "COMPLETED" || state.status === "FAILED" ||
           state.status === "EXPIRED"
         ) {
-          btn.disabled = false;
+          syncSendBtn();
           loadBalances();
         }
       }, (err) => {
         statusEl.innerHTML = stepperHtml(null, err);
-        btn.disabled = false;
+        syncSendBtn();
       });
       onCleanup(stop);
     } catch (e) {
@@ -575,7 +562,7 @@ async function paySurface(): Promise<HTMLElement> {
         errEl.textContent = e instanceof Error ? e.message : String(e);
         errEl.hidden = false;
       }
-      btn.disabled = false;
+      syncSendBtn();
     }
   });
 
