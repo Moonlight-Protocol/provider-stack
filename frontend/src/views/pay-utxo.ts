@@ -208,6 +208,7 @@ async function paySurface(): Promise<HTMLElement> {
   })();
 
   content.innerHTML = `
+    <style>@keyframes pu-spin{to{transform:rotate(360deg)}}</style>
     ${kycBannerHtml}
     <section class="empty-state" style="margin:1.5rem 0">
       <div style="display:flex;justify-content:space-between;align-items:baseline">
@@ -300,6 +301,15 @@ async function paySurface(): Promise<HTMLElement> {
   const wrapper = pageLayout(nav, content);
   const $ = <T extends HTMLElement>(sel: string) =>
     content.querySelector(sel) as T;
+
+  // Loading state: a spinner inside the disabled action button — never a
+  // stepper. Failures still render their detail below the button.
+  const SPINNER =
+    `<span style="display:inline-block;width:0.85em;height:0.85em;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:pu-spin 0.6s linear infinite;vertical-align:-0.08em"></span>`;
+  const spin = (btn: HTMLButtonElement) => {
+    btn.disabled = true;
+    btn.innerHTML = SPINNER;
+  };
 
   // ── Balance: per-asset channel balances + wallet funds ──
   const depositAssetSelect = $<HTMLSelectElement>("#deposit-asset");
@@ -421,33 +431,37 @@ async function paySurface(): Promise<HTMLElement> {
     if (!depositChannel) return;
     const btn = depositBtn;
     const statusEl = $("#deposit-status");
-    btn.disabled = true;
+    const restore = () => {
+      btn.textContent = "Deposit";
+      syncDepositBtn();
+    };
+    spin(btn);
+    statusEl.innerHTML = "";
     try {
       const amount = toStroops($<HTMLInputElement>("#deposit-amount").value);
       if (amount <= 0n) throw new Error("Enter a deposit amount");
-      statusEl.innerHTML =
-        `<p class="hint-text">Waiting for the wallet signature…</p>`;
       const bundleId = await submitDeposit(amount, depositChannel);
       capture("entity_deposit_submitted", { bundleId });
       const stop = pollBundle(bundleId, (state) => {
-        statusEl.innerHTML = stepperHtml(state);
-        if (
-          state.status === "COMPLETED" || state.status === "FAILED" ||
-          state.status === "EXPIRED"
+        if (state.status === "COMPLETED") {
+          restore();
+          loadBalances();
+        } else if (
+          state.status === "FAILED" || state.status === "EXPIRED"
         ) {
-          syncDepositBtn();
-          if (state.status === "COMPLETED") loadBalances();
+          statusEl.innerHTML = stepperHtml(state);
+          restore();
         }
       }, (err) => {
         statusEl.innerHTML = stepperHtml(null, err);
-        syncDepositBtn();
+        restore();
       });
       onCleanup(stop);
     } catch (e) {
       statusEl.innerHTML = e instanceof EntityNotApprovedError
         ? notApprovedHtml(e.providerPublicKey)
         : stepperHtml(null, e instanceof Error ? e.message : String(e));
-      syncDepositBtn();
+      restore();
     }
   });
 
@@ -531,8 +545,13 @@ async function paySurface(): Promise<HTMLElement> {
     if (!channel || !kycOk) return;
     const errEl = $("#send-error");
     const statusEl = $("#send-status");
+    const restore = () => {
+      sendBtn.textContent = "Send";
+      syncSendBtn();
+    };
     errEl.hidden = true;
-    sendBtn.disabled = true;
+    spin(sendBtn);
+    statusEl.innerHTML = "";
     try {
       if (!isSeedReady()) await loadBalances();
       const parsed = parseReceiverOps(
@@ -541,17 +560,19 @@ async function paySurface(): Promise<HTMLElement> {
       const { bundleId } = await submitSend(parsed, channel);
       capture("entity_send_submitted", { bundleId });
       const stop = pollBundle(bundleId, (state) => {
-        statusEl.innerHTML = stepperHtml(state);
-        if (
-          state.status === "COMPLETED" || state.status === "FAILED" ||
-          state.status === "EXPIRED"
+        if (state.status === "COMPLETED") {
+          restore();
+          loadBalances();
+        } else if (
+          state.status === "FAILED" || state.status === "EXPIRED"
         ) {
-          syncSendBtn();
+          statusEl.innerHTML = stepperHtml(state);
+          restore();
           loadBalances();
         }
       }, (err) => {
         statusEl.innerHTML = stepperHtml(null, err);
-        syncSendBtn();
+        restore();
       });
       onCleanup(stop);
     } catch (e) {
@@ -561,7 +582,7 @@ async function paySurface(): Promise<HTMLElement> {
         errEl.textContent = e instanceof Error ? e.message : String(e);
         errEl.hidden = false;
       }
-      syncSendBtn();
+      restore();
     }
   });
 
@@ -570,7 +591,12 @@ async function paySurface(): Promise<HTMLElement> {
     const withdrawChannel = channels[Number(withdrawAssetSelect.value) || 0];
     if (!withdrawChannel) return;
     const statusEl = $("#withdraw-status");
-    withdrawBtn.disabled = true;
+    const restore = () => {
+      withdrawBtn.textContent = "Withdraw";
+      syncWithdrawBtn();
+    };
+    spin(withdrawBtn);
+    statusEl.innerHTML = "";
     try {
       const amount = toStroops($<HTMLInputElement>("#withdraw-amount").value);
       if (amount <= 0n) throw new Error("Enter a withdraw amount");
@@ -580,24 +606,25 @@ async function paySurface(): Promise<HTMLElement> {
       const bundleId = await submitWithdraw(amount, withdrawChannel);
       capture("entity_withdraw_submitted", { bundleId });
       const stop = pollBundle(bundleId, (state) => {
-        statusEl.innerHTML = stepperHtml(state);
-        if (
-          state.status === "COMPLETED" || state.status === "FAILED" ||
-          state.status === "EXPIRED"
+        if (state.status === "COMPLETED") {
+          restore();
+          loadBalances();
+        } else if (
+          state.status === "FAILED" || state.status === "EXPIRED"
         ) {
-          syncWithdrawBtn();
-          if (state.status === "COMPLETED") loadBalances();
+          statusEl.innerHTML = stepperHtml(state);
+          restore();
         }
       }, (err) => {
         statusEl.innerHTML = stepperHtml(null, err);
-        syncWithdrawBtn();
+        restore();
       });
       onCleanup(stop);
     } catch (e) {
       statusEl.innerHTML = e instanceof EntityNotApprovedError
         ? notApprovedHtml(e.providerPublicKey)
         : stepperHtml(null, e instanceof Error ? e.message : String(e));
-      syncWithdrawBtn();
+      restore();
     }
   });
 

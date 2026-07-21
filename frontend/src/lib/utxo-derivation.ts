@@ -39,7 +39,12 @@ export interface ChannelIds {
 export interface DerivedUtxo {
   index: number;
   keypair: UTXOKeypairBase;
-  /** On-chain balance from the last refresh; 0 = unused (or spent). */
+  /**
+   * On-chain balance from the last refresh. -1 = never existed (the
+   * contract's marker, also the initial state before a read) — the ONLY
+   * state a key may be re-used from. 0 = exists but spent: re-CREATEing it
+   * fails on-chain with UTXOAlreadyExists(#1).
+   */
   balance: bigint;
   /** Reserved for an in-flight op (deposit/change/receive) this visit. */
   reserved: boolean;
@@ -138,7 +143,7 @@ async function deriveIndex(index: number): Promise<DerivedUtxo> {
   return {
     index,
     keypair: new UTXOKeypairBase(kp),
-    balance: 0n,
+    balance: -1n,
     reserved: false,
   };
 }
@@ -193,11 +198,14 @@ export async function refreshBalances(ids: ChannelIds): Promise<void> {
       // deno-lint-ignore no-explicit-any
     } as any) as bigint[];
     balances.forEach((b, i) => {
-      slice[i].balance = b ?? 0n;
+      slice[i].balance = b ?? -1n;
     });
-    const batchFunded = slice.some((d) => d.balance > 0n);
+    // Keep scanning while the batch holds any EXISTING key (funded or
+    // spent) — stopping at "no funded" would leave existing keys past the
+    // boundary unread, and the -1 frontier must be truly never-used.
+    const batchTouched = slice.some((d) => d.balance >= 0n);
     batch++;
-    if (batch >= MIN_SCAN_BATCHES && !batchFunded) return;
+    if (batch >= MIN_SCAN_BATCHES && !batchTouched) return;
   }
 }
 
@@ -216,12 +224,16 @@ export function fundedCount(): number {
   return derived.filter((d) => d.balance > 0n).length;
 }
 
-/** Reserve `n` unused keys (no balance — 0 or the contract's -1 "does not
- * exist" marker — and not already handed out). */
+/**
+ * Reserve `n` never-used keys. Only balance -1 (the contract's "does not
+ * exist" marker) qualifies: a balance of exactly 0 means the UTXO exists
+ * but was spent, and re-CREATEing a spent UTXO fails the whole bundle
+ * on-chain with UTXOAlreadyExists(#1).
+ */
 export async function reserveFreeUtxos(n: number): Promise<DerivedUtxo[]> {
   const out: DerivedUtxo[] = [];
   while (out.length < n) {
-    const free = derived.find((d) => d.balance <= 0n && !d.reserved);
+    const free = derived.find((d) => d.balance < 0n && !d.reserved);
     if (!free) {
       await deriveBatch();
       continue;
