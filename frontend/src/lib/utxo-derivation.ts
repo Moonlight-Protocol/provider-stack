@@ -199,6 +199,11 @@ export async function refreshBalances(ids: ChannelIds): Promise<void> {
     } as any) as bigint[];
     balances.forEach((b, i) => {
       slice[i].balance = b ?? -1n;
+      // A reservation protects an in-flight CREATE; once the key exists
+      // on-chain that job is done — clear it so the funds are spendable
+      // this session. Keys still at -1 (a handed-out payment code the
+      // payer hasn't executed) stay reserved.
+      if (slice[i].balance >= 0n) slice[i].reserved = false;
     });
     // Keep scanning while the batch holds any EXISTING key (funded or
     // spent) — stopping at "no funded" would leave existing keys past the
