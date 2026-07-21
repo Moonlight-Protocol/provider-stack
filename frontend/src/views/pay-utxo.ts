@@ -40,6 +40,7 @@ import {
   type BundleState,
   DEPOSIT_FEE,
   EntityNotApprovedError,
+  ensureTrustline,
   fromStroops,
   getBundle,
   getEntityChannels,
@@ -48,7 +49,9 @@ import {
   SEND_FEE,
   submitDeposit,
   submitSend,
+  submitWithdraw,
   toStroops,
+  WITHDRAW_FEE,
 } from "../lib/moonlight-client.ts";
 import {
   balance,
@@ -240,7 +243,7 @@ async function paySurface(): Promise<HTMLElement> {
       <p id="request-error" class="error-text" style="margin-top:0.75rem" hidden></p>
     </section>
 
-    <section class="empty-state" style="margin-bottom:3rem">
+    <section class="empty-state" style="margin-bottom:1.5rem">
       <h2 style="margin:0 0 0.25rem;font-size:1rem">Send</h2>
       <p style="color:var(--text-muted);font-size:0.82rem;margin-bottom:1rem">
         Paste the receiving keys someone shared with you. Sends spend your
@@ -256,6 +259,25 @@ async function paySurface(): Promise<HTMLElement> {
   }>Send</button>
       <p id="send-error" class="error-text" style="margin-top:0.75rem" hidden></p>
       <div id="send-status"></div>
+    </section>
+
+    <section class="empty-state" style="margin-bottom:3rem">
+      <h2 style="margin:0 0 0.25rem;font-size:1rem">Withdraw</h2>
+      <p style="color:var(--text-muted);font-size:0.82rem;margin-bottom:1rem">
+        Move funds out of the channel, back to your connected wallet.
+      </p>
+      <div class="form-row">
+        <div class="form-group" style="margin-bottom:0;max-width:160px">
+          <label for="withdraw-asset">Asset</label>
+          <select id="withdraw-asset" style="width:100%;padding:0.6rem 0.75rem;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text)"></select>
+        </div>
+        <div class="form-group" style="margin-bottom:0">
+          <label for="withdraw-amount">Amount</label>
+          <input id="withdraw-amount" placeholder="0.00" />
+        </div>
+        <button id="withdraw-btn" class="btn-primary" disabled>Withdraw</button>
+      </div>
+      <div id="withdraw-status"></div>
     </section>
   `;
 
@@ -291,6 +313,35 @@ async function paySurface(): Promise<HTMLElement> {
   };
   $("#deposit-amount").addEventListener("input", syncDepositBtn);
   $("#deposit-asset").addEventListener("input", syncDepositBtn);
+
+  // Withdraw mirrors Deposit but is gated on the CHANNEL balance of the
+  // selected asset (the funds being moved out), not the wallet's.
+  const withdrawAssetSelect = $<HTMLSelectElement>("#withdraw-asset");
+  channels.forEach((c, i) => {
+    const opt = document.createElement("option");
+    opt.value = String(i);
+    opt.textContent = c.assetCode || c.label || shortId(c.assetContractId);
+    withdrawAssetSelect.appendChild(opt);
+  });
+  const withdrawBtn = $<HTMLButtonElement>("#withdraw-btn");
+  const syncWithdrawBtn = () => {
+    let ok = !!channel;
+    if (ok) {
+      try {
+        const amount = toStroops(
+          $<HTMLInputElement>("#withdraw-amount").value,
+        );
+        const chanBalance =
+          assetBalances.get(Number(withdrawAssetSelect.value) || 0) ?? 0n;
+        ok = amount > 0n && amount + WITHDRAW_FEE <= chanBalance;
+      } catch {
+        ok = false;
+      }
+    }
+    withdrawBtn.disabled = !ok;
+  };
+  $("#withdraw-amount").addEventListener("input", syncWithdrawBtn);
+  $("#withdraw-asset").addEventListener("input", syncWithdrawBtn);
 
   const refreshUI = () => {
     $("#asset-list").innerHTML = channels.map((c, i) => {
@@ -337,6 +388,7 @@ async function paySurface(): Promise<HTMLElement> {
       statusEl.textContent = "";
       refreshUI();
       syncDepositBtn();
+      syncWithdrawBtn();
     } catch (e) {
       statusEl.textContent = "";
       const msg = e instanceof Error ? e.message : String(e);
@@ -503,6 +555,42 @@ async function paySurface(): Promise<HTMLElement> {
         errEl.hidden = false;
       }
       btn.disabled = false;
+    }
+  });
+
+  // ── Withdraw ──
+  withdrawBtn.addEventListener("click", async () => {
+    const withdrawChannel = channels[Number(withdrawAssetSelect.value) || 0];
+    if (!withdrawChannel) return;
+    const statusEl = $("#withdraw-status");
+    withdrawBtn.disabled = true;
+    try {
+      const amount = toStroops($<HTMLInputElement>("#withdraw-amount").value);
+      if (amount <= 0n) throw new Error("Enter a withdraw amount");
+      // First withdraw of a classic asset may raise the one trustline
+      // popup; XLM and Soroban tokens pass straight through.
+      await ensureTrustline(withdrawChannel);
+      const bundleId = await submitWithdraw(amount, withdrawChannel);
+      capture("entity_withdraw_submitted", { bundleId });
+      const stop = pollBundle(bundleId, (state) => {
+        statusEl.innerHTML = stepperHtml(state);
+        if (
+          state.status === "COMPLETED" || state.status === "FAILED" ||
+          state.status === "EXPIRED"
+        ) {
+          syncWithdrawBtn();
+          if (state.status === "COMPLETED") loadBalances();
+        }
+      }, (err) => {
+        statusEl.innerHTML = stepperHtml(null, err);
+        syncWithdrawBtn();
+      });
+      onCleanup(stop);
+    } catch (e) {
+      statusEl.innerHTML = e instanceof EntityNotApprovedError
+        ? notApprovedHtml(e.providerPublicKey)
+        : stepperHtml(null, e instanceof Error ? e.message : String(e));
+      syncWithdrawBtn();
     }
   });
 

@@ -16,9 +16,19 @@
  *   POST /provider/entity/bundles { operationsMLXDR, channelContractId }
  */
 import { MoonlightOperation } from "@moonlight/moonlight-sdk";
-import { authorizeEntry, type xdr } from "stellar-sdk";
+import {
+  Asset,
+  authorizeEntry,
+  BASE_FEE,
+  Contract,
+  Operation,
+  rpc,
+  scValToNative,
+  TransactionBuilder,
+  type xdr,
+} from "stellar-sdk";
 import { Buffer } from "buffer";
-import { RPC_URL } from "./config.ts";
+import { HORIZON_URL, RPC_URL } from "./config.ts";
 import { entityFetch } from "./entity-auth.ts";
 import {
   getEntityAddress,
@@ -36,6 +46,7 @@ import {
 // LOW-entropy fees, matching the reference clients (local-dev/lib/client).
 export const DEPOSIT_FEE = 500_000n; // 0.05 XLM in stroops
 export const SEND_FEE = 1_000_000n; // 0.1 XLM in stroops
+export const WITHDRAW_FEE = 1_000_000n; // 0.1 XLM in stroops
 
 // ── Amounts ────────────────────────────────────────────────────
 
@@ -350,4 +361,141 @@ export async function submitSend(
     channel.channelContractId,
   );
   return { bundleId, spent: selection.selected };
+}
+
+// ── Withdraw ───────────────────────────────────────────────────
+
+/**
+ * Make sure the connected wallet can receive the channel's asset. XLM and
+ * pure Soroban tokens need nothing. A SAC-wrapped classic asset needs a
+ * trustline — checked via Horizon and, when missing, created with a
+ * ChangeTrust the wallet signs (the one popup a first withdraw can raise).
+ */
+export async function ensureTrustline(channel: ChannelIds): Promise<void> {
+  const account = getEntityAddress();
+  if (!account) throw new Error("Wallet not connected");
+  const passphrase = getNetworkPassphrase();
+  if (channel.assetContractId === Asset.native().contractId(passphrase)) {
+    return;
+  }
+
+  const server = new rpc.Server(RPC_URL, { allowHttp: true });
+
+  // A SAC's token name is "CODE:ISSUER"; a name without an issuer half
+  // means a plain Soroban token — no trustline concept.
+  const nameTx = new TransactionBuilder(await server.getAccount(account), {
+    fee: BASE_FEE,
+    networkPassphrase: passphrase,
+  })
+    .addOperation(new Contract(channel.assetContractId).call("name"))
+    .setTimeout(60)
+    .build();
+  const sim = await server.simulateTransaction(nameTx);
+  if (!rpc.Api.isSimulationSuccess(sim)) {
+    throw new Error("Could not resolve this channel's asset");
+  }
+  const name = String(scValToNative(sim.result!.retval));
+  const [code, issuer] = name.split(":");
+  if (!issuer) return;
+
+  const accRes = await fetch(`${HORIZON_URL}/accounts/${account}`);
+  if (accRes.ok) {
+    const acc = await accRes.json();
+    const trusted = (acc.balances as Array<Record<string, string>> ?? [])
+      .some((b) => b.asset_code === code && b.asset_issuer === issuer);
+    if (trusted) return;
+  }
+
+  const trustTx = new TransactionBuilder(await server.getAccount(account), {
+    fee: (Number(BASE_FEE) * 10).toString(),
+    networkPassphrase: passphrase,
+  })
+    .addOperation(Operation.changeTrust({ asset: new Asset(code, issuer) }))
+    .setTimeout(120)
+    .build();
+  const signed = await signEntityTransaction(trustTx.toXDR());
+  const sent = await server.sendTransaction(
+    TransactionBuilder.fromXDR(signed, passphrase),
+  );
+  if (sent.status === "ERROR") {
+    throw new Error("The trustline transaction was rejected");
+  }
+  for (let i = 0; i < 30; i++) {
+    const st = await server.getTransaction(sent.hash);
+    if (st.status === rpc.Api.GetTransactionStatus.SUCCESS) return;
+    if (st.status === rpc.Api.GetTransactionStatus.FAILED) {
+      throw new Error("The trustline transaction failed");
+    }
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+  throw new Error("The trustline transaction timed out");
+}
+
+/**
+ * Withdraw `amount` stroops from the channel to the connected wallet — the
+ * destination is always the signed-in account, never a pasted address. No
+ * wallet popup: SPENDs are P256-signed in memory (ensureTrustline may raise
+ * one first, for a classic asset's first withdraw). Bundle order matches
+ * the reference client: WITHDRAW, change CREATE, SPENDs.
+ */
+export async function submitWithdraw(
+  amount: bigint,
+  channel: ChannelIds,
+): Promise<string> {
+  const account = getEntityAddress();
+  if (!account) throw new Error("Wallet not connected");
+
+  const totalToSpend = amount + WITHDRAW_FEE;
+  const selection = selectFunded(totalToSpend);
+  if (!selection) {
+    throw new Error(
+      `Insufficient balance: need ${fromStroops(totalToSpend)} (incl. ${
+        fromStroops(WITHDRAW_FEE)
+      } fee)`,
+    );
+  }
+
+  const withdrawOp = MoonlightOperation.withdraw(
+    account as `G${string}`,
+    amount,
+  );
+
+  const createOps = [];
+  if (selection.change > 0n) {
+    const [changeTarget] = await reserveFreeUtxos(1);
+    createOps.push(
+      MoonlightOperation.create(
+        changeTarget.keypair.publicKey,
+        selection.change,
+      ),
+    );
+  }
+
+  const expiration = (await getLatestLedger()) + 1000;
+
+  const spendOps = [];
+  for (const utxo of selection.selected) {
+    let spendOp = MoonlightOperation.spend(utxo.keypair.publicKey);
+    spendOp = spendOp.addCondition(withdrawOp.toCondition());
+    for (const createOp of createOps) {
+      spendOp = spendOp.addCondition(createOp.toCondition());
+    }
+    utxo.reserved = true;
+    spendOps.push(
+      await spendOp.signWithUTXO(
+        utxo.keypair,
+        channel.channelContractId as `C${string}`,
+        expiration,
+      ),
+    );
+  }
+
+  return await submitBundle(
+    [
+      withdrawOp.toMLXDR(),
+      ...createOps.map((op) => op.toMLXDR()),
+      ...spendOps.map((op) => op.toMLXDR()),
+    ],
+    channel.channelContractId,
+  );
 }
