@@ -154,13 +154,13 @@ function pollBundle(
  * KYC form instead of echoing a bare 403.
  */
 function notApprovedHtml(providerPublicKey: string): string {
-  const href = `#/entities/register?provider=${
+  const href = `${globalThis.location.origin}/#/entities/register?provider=${
     encodeURIComponent(providerPublicKey)
   }`;
   return `<p class="error-text" style="margin-top:1rem">
     This provider hasn't approved your account yet.
-    <a href="${href}">Complete the registration form</a>, then come back
-    and try again.</p>`;
+    Complete the registration form:
+    <a href="${href}" target="_blank" rel="noopener">${href}</a></p>`;
 }
 
 function signOut(): void {
