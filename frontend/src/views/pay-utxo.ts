@@ -153,6 +153,27 @@ function pollBundle(
  * Not-approved is actionable: link the entity straight to this provider's
  * KYC form instead of echoing a bare 403.
  */
+/**
+ * Minimal toast — @moonlight/ui (v0.3.x) ships no toast component, so this
+ * styles itself with the library's tokens. Auto-dismisses.
+ */
+function showToast(message: string): void {
+  const el = document.createElement("div");
+  el.textContent = message;
+  el.style.cssText =
+    "position:fixed;bottom:1.5rem;left:50%;transform:translateX(-50%);" +
+    "background:var(--bg);color:var(--text);border:1px solid var(--border);" +
+    "border-radius:8px;padding:0.6rem 1rem;font-size:0.85rem;" +
+    "box-shadow:0 4px 16px rgba(0,0,0,0.35);z-index:1000;opacity:0;" +
+    "transition:opacity 0.2s";
+  document.body.appendChild(el);
+  requestAnimationFrame(() => el.style.opacity = "1");
+  setTimeout(() => {
+    el.style.opacity = "0";
+    setTimeout(() => el.remove(), 250);
+  }, 2200);
+}
+
 function registrationUrl(providerPublicKey: string): string {
   return `${globalThis.location.origin}/#/entities/register?provider=${
     encodeURIComponent(providerPublicKey)
@@ -514,14 +535,11 @@ async function paySurface(): Promise<HTMLElement> {
         capture("entity_receive_generated", { count });
       }
       await navigator.clipboard.writeText(lastRequest.code);
-      copyBtn.textContent = "Copied";
-      setTimeout(() => {
-        copyBtn.textContent = "Get code";
-        syncCopyBtn();
-      }, 3000);
+      showToast("Copied to clipboard");
     } catch (e) {
       errEl.textContent = e instanceof Error ? e.message : String(e);
       errEl.hidden = false;
+    } finally {
       syncCopyBtn();
     }
   });
