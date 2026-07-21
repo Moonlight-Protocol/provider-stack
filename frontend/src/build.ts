@@ -59,6 +59,8 @@ async function writeConfigJs(): Promise<void> {
     `// Edit to match your deployment; the SPA reads window.__CONSOLE_CONFIG__.\n` +
     `window.__CONSOLE_CONFIG__ = {\n` +
     `  apiBaseUrl: "/api/v1",\n` +
+    `  stellarNetwork: "standalone",\n` +
+    `  allowlist: ["*"],\n` +
     `};\n`;
   await Deno.writeTextFile(CONFIG_OUT, body);
   console.log("Built public/config.js");

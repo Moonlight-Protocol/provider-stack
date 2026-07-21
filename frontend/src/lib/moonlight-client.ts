@@ -132,6 +132,8 @@ export async function getEntityChannels(): Promise<ChannelIds[]> {
       channelContractId: c.channelContractId,
       assetContractId: c.assetContractId,
       channelAuthId: c.channelAuthId,
+      assetCode: c.assetCode,
+      label: c.label,
     }));
 }
 

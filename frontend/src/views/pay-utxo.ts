@@ -214,34 +214,30 @@ async function paySurface(): Promise<HTMLElement> {
     </section>
 
     <section class="empty-state" style="margin-bottom:1.5rem">
-      <h2 style="margin:0 0 0.25rem;font-size:1rem">Request transfer</h2>
+      <div style="display:flex;justify-content:space-between;align-items:baseline">
+        <h2 style="margin:0 0 0.25rem;font-size:1rem">Request transfer</h2>
+        <button id="request-advanced-btn" class="btn-link" title="Advanced options" aria-label="Advanced options" style="font-size:1rem;line-height:1">⚙</button>
+      </div>
       <p style="color:var(--text-muted);font-size:0.82rem;margin-bottom:1rem">
-        Reserve receiving keys and share them with whoever is paying you —
-        over any channel you like. Keys re-derive from your wallet, so there
-        is nothing to back up.
+        Generate a payment code to request a transfer for the chosen asset.
       </p>
       <div class="form-row">
+        <div class="form-group" style="margin-bottom:0;max-width:160px">
+          <label for="request-asset">Asset</label>
+          <select id="request-asset" style="width:100%;padding:0.6rem 0.75rem;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text)"></select>
+        </div>
         <div class="form-group" style="margin-bottom:0">
-          <label for="request-amount">Amount (XLM)</label>
+          <label for="request-amount">Amount</label>
           <input id="request-amount" placeholder="0.00" />
         </div>
-        <div class="form-group" style="margin-bottom:0;max-width:140px">
-          <label for="request-count">Keys</label>
-          <input id="request-count" value="1" />
-        </div>
-        <button id="request-btn" class="btn-primary">Generate</button>
+        <button id="request-copy-btn" class="btn-primary" disabled>Copy to clipboard</button>
       </div>
+      <div id="request-advanced" class="form-group" style="margin:0.75rem 0 0" hidden>
+        <label for="request-count">Number of UTXOs</label>
+        <input id="request-count" value="3" style="max-width:140px" />
+      </div>
+      <p id="request-status" class="hint-text" style="margin-top:0.75rem"></p>
       <p id="request-error" class="error-text" style="margin-top:0.75rem" hidden></p>
-      <div id="request-output" hidden>
-        <div class="form-group" style="margin-top:1rem;margin-bottom:0.5rem">
-          <label>Share with the payer (CREATE operations)</label>
-          <textarea id="request-blob" readonly rows="4" style="width:100%;padding:0.6rem 0.75rem;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:0.72rem;font-family:var(--font-mono);resize:vertical"></textarea>
-        </div>
-        <div style="display:flex;justify-content:space-between;align-items:center;gap:0.5rem;flex-wrap:wrap">
-          <span class="hint-text" style="margin:0">Public — safe to share.</span>
-          <button id="copy-blob-btn" class="btn-link">Copy</button>
-        </div>
-      </div>
     </section>
 
     <section class="empty-state" style="margin-bottom:3rem">
@@ -339,26 +335,65 @@ async function paySurface(): Promise<HTMLElement> {
   });
 
   // ── Request ──
-  $("#request-btn").addEventListener("click", async () => {
-    const errEl = $("#request-error");
-    errEl.hidden = true;
-    try {
-      if (!isSeedReady()) await loadBalances();
-      const amount = toStroops($<HTMLInputElement>("#request-amount").value);
-      if (amount <= 0n) throw new Error("Enter the amount to request");
-      const count = Number($<HTMLInputElement>("#request-count").value);
-      const mlxdrs = await prepareReceive(amount, count);
-      $<HTMLTextAreaElement>("#request-blob").value = mlxdrs.join("\n");
-      $("#request-output").hidden = false;
-      capture("entity_receive_generated", { count });
+  const assetSelect = $<HTMLSelectElement>("#request-asset");
+  channels.forEach((c, i) => {
+    const opt = document.createElement("option");
+    opt.value = String(i);
+    opt.textContent = c.assetCode || c.label || shortId(c.assetContractId);
+    assetSelect.appendChild(opt);
+  });
 
-      $("#copy-blob-btn").onclick = () => {
-        navigator.clipboard.writeText(mlxdrs.join("\n"));
-        $("#copy-blob-btn").textContent = "Copied";
-      };
+  $("#request-advanced-btn").addEventListener("click", () => {
+    const adv = $("#request-advanced");
+    adv.hidden = !adv.hidden;
+  });
+
+  const copyBtn = $<HTMLButtonElement>("#request-copy-btn");
+  const requestInputsValid = (): boolean => {
+    try {
+      const amount = toStroops($<HTMLInputElement>("#request-amount").value);
+      const count = Number($<HTMLInputElement>("#request-count").value);
+      return amount > 0n && Number.isInteger(count) && count >= 1;
+    } catch {
+      return false;
+    }
+  };
+  const syncCopyBtn = () => {
+    copyBtn.disabled = !requestInputsValid();
+  };
+  for (const sel of ["#request-amount", "#request-count", "#request-asset"]) {
+    $(sel).addEventListener("input", syncCopyBtn);
+  }
+
+  // One payment code per filled-in form: re-clicking with unchanged inputs
+  // copies the same code instead of reserving another set of keys.
+  let lastRequest = { key: "", code: "" };
+  copyBtn.addEventListener("click", async () => {
+    const errEl = $("#request-error");
+    const statusEl = $("#request-status");
+    errEl.hidden = true;
+    copyBtn.disabled = true;
+    try {
+      const amount = toStroops($<HTMLInputElement>("#request-amount").value);
+      const count = Number($<HTMLInputElement>("#request-count").value);
+      const key = `${assetSelect.value}|${amount}|${count}`;
+      if (lastRequest.key !== key) {
+        const mlxdrs = await prepareReceive(amount, count);
+        lastRequest = { key, code: mlxdrs.join("\n") };
+        capture("entity_receive_generated", { count });
+      }
+      await navigator.clipboard.writeText(lastRequest.code);
+      copyBtn.textContent = "Copied ✓";
+      statusEl.textContent =
+        "Payment code copied — share it with whoever is paying you.";
+      setTimeout(() => {
+        copyBtn.textContent = "Copy to clipboard";
+      }, 2000);
     } catch (e) {
       errEl.textContent = e instanceof Error ? e.message : String(e);
       errEl.hidden = false;
+    } finally {
+      syncCopyBtn();
     }
   });
 

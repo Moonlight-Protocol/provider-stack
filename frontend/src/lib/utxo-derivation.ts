@@ -31,6 +31,9 @@ export interface ChannelIds {
   channelContractId: string;
   channelAuthId: string;
   assetContractId: string;
+  /** Asset code from the council's channel config (e.g. "XLM"). */
+  assetCode?: string;
+  label?: string;
 }
 
 export interface DerivedUtxo {
