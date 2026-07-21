@@ -47,7 +47,6 @@ import {
   getEntityStatus,
   parseReceiverOps,
   prepareReceive,
-  SEND_FEE,
   submitDeposit,
   submitSend,
   submitWithdraw,
@@ -240,7 +239,7 @@ async function paySurface(): Promise<HTMLElement> {
           <label for="request-amount">Amount</label>
           <input id="request-amount" placeholder="0.00" />
         </div>
-        <button id="request-copy-btn" class="btn-primary" disabled>Copy</button>
+        <button id="request-copy-btn" class="btn-primary" disabled>Get code</button>
       </div>
       <div id="request-advanced" class="form-group" style="margin:0.75rem 0 0" hidden>
         <label for="request-count">Number of UTXOs</label>
@@ -503,7 +502,7 @@ async function paySurface(): Promise<HTMLElement> {
       await navigator.clipboard.writeText(lastRequest.code);
       copyBtn.textContent = "Copied";
       setTimeout(() => {
-        copyBtn.textContent = "Copy";
+        copyBtn.textContent = "Get code";
         syncCopyBtn();
       }, 3000);
     } catch (e) {
