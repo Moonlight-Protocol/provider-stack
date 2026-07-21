@@ -465,6 +465,9 @@ async function paySurface(): Promise<HTMLElement> {
       capture("entity_deposit_submitted", { bundleId });
       const stop = pollBundle(bundleId, (state) => {
         if (state.status === "COMPLETED") {
+          showToast("Deposit completed");
+          $<HTMLInputElement>("#deposit-amount").value = "";
+          depositAssetSelect.selectedIndex = 0;
           restore();
           loadBalances();
         } else if (
@@ -579,6 +582,8 @@ async function paySurface(): Promise<HTMLElement> {
       capture("entity_send_submitted", { bundleId });
       const stop = pollBundle(bundleId, (state) => {
         if (state.status === "COMPLETED") {
+          showToast("Transfer sent");
+          $<HTMLInputElement>("#send-code").value = "";
           restore();
           loadBalances();
         } else if (
@@ -625,6 +630,9 @@ async function paySurface(): Promise<HTMLElement> {
       capture("entity_withdraw_submitted", { bundleId });
       const stop = pollBundle(bundleId, (state) => {
         if (state.status === "COMPLETED") {
+          showToast("Withdraw completed");
+          $<HTMLInputElement>("#withdraw-amount").value = "";
+          withdrawAssetSelect.selectedIndex = 0;
           restore();
           loadBalances();
         } else if (
