@@ -148,6 +148,19 @@ export async function getEntityChannels(): Promise<ChannelIds[]> {
     }));
 }
 
+/** The entity session's approval state + the provider key for KYC links. */
+export async function getEntityStatus(): Promise<
+  { approved: boolean; providerPublicKey: string }
+> {
+  const res = await entityFetch("/provider/entity/status");
+  if (!res.ok) throw new Error(`Status lookup failed: ${res.status}`);
+  const { data } = await res.json();
+  return {
+    approved: data.approved === true,
+    providerPublicKey: data.providerPublicKey ?? "",
+  };
+}
+
 // ── Bundle submission / polling ────────────────────────────────
 
 export type BundleStatus =

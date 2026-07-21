@@ -153,10 +153,14 @@ function pollBundle(
  * Not-approved is actionable: link the entity straight to this provider's
  * KYC form instead of echoing a bare 403.
  */
-function notApprovedHtml(providerPublicKey: string): string {
-  const href = `${globalThis.location.origin}/#/entities/register?provider=${
+function registrationUrl(providerPublicKey: string): string {
+  return `${globalThis.location.origin}/#/entities/register?provider=${
     encodeURIComponent(providerPublicKey)
   }`;
+}
+
+function notApprovedHtml(providerPublicKey: string): string {
+  const href = registrationUrl(providerPublicKey);
   return `<p class="error-text" style="margin-top:1rem">
     This provider hasn't approved your account yet.
     Complete the registration form:
@@ -177,6 +181,10 @@ async function paySurface(): Promise<HTMLElement> {
   const sub = getEntityJwtSub();
   const channels = await getEntityChannels().catch(() => []);
   const channel = channels[0] ?? null;
+  // Fail open on a status-lookup error: the banner is guidance, the
+  // server-side approval gate on submit stays authoritative.
+  const kyc = await getEntityStatus().catch(() => null);
+  const kycOk = kyc ? kyc.approved : true;
 
   const nav = renderNav({
     brand: "Pay (UTXO)",
@@ -189,12 +197,22 @@ async function paySurface(): Promise<HTMLElement> {
   const content = document.createElement("div");
   content.className = "container";
   content.style.maxWidth = "680px";
+  const kycBannerHtml = kycOk ? "" : (() => {
+    const href = registrationUrl(kyc?.providerPublicKey ?? "");
+    return `<section class="empty-state" style="margin:1.5rem 0">
+      <p class="error-text" style="margin:0">You cannot operate until you
+      provide your KYC/KYB info. Complete the registration form:
+      <a href="${href}" target="_blank" rel="noopener">${href}</a></p>
+    </section>`;
+  })();
+
   content.innerHTML = `
+    ${kycBannerHtml}
     <section class="empty-state" style="margin:1.5rem 0">
       <div style="display:flex;justify-content:space-between;align-items:baseline">
         <h2 style="margin:0 0 0.25rem;font-size:1rem">Balance</h2>
         <button id="refresh-btn" class="btn-link" title="Refresh balances" aria-label="Refresh balances" style="font-size:1rem;line-height:1" ${
-    channel ? "" : "disabled"
+    channel && kycOk ? "" : "disabled"
   }>⟳</button>
       </div>
       <p id="balance-status" class="hint-text" style="margin:0 0 1rem"></p>
@@ -202,25 +220,11 @@ async function paySurface(): Promise<HTMLElement> {
     </section>
 
     <section class="empty-state" style="margin-bottom:1.5rem">
-      <h2 style="margin:0 0 0.25rem;font-size:1rem">Deposit</h2>
-      <div class="form-row" style="margin:0.5rem 0 0">
-        <div class="form-group" style="margin-bottom:0;max-width:160px">
-          <label for="deposit-asset">Asset</label>
-          <select id="deposit-asset" style="width:100%;padding:0.6rem 0.75rem;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text)"></select>
-        </div>
-        <div class="form-group" style="margin-bottom:0">
-          <label for="deposit-amount">Amount</label>
-          <input id="deposit-amount" placeholder="0.00" />
-        </div>
-        <button id="deposit-btn" class="btn-primary" disabled>Deposit</button>
-      </div>
-      <div id="deposit-status"></div>
-    </section>
-
-    <section class="empty-state" style="margin-bottom:1.5rem">
       <div style="display:flex;justify-content:space-between;align-items:baseline">
         <h2 style="margin:0 0 0.25rem;font-size:1rem">Request transfer</h2>
-        <button id="request-advanced-btn" class="btn-link" title="Advanced options" aria-label="Advanced options" style="font-size:1rem;line-height:1">⚙</button>
+        <button id="request-advanced-btn" class="btn-link" title="Advanced options" aria-label="Advanced options" style="font-size:1rem;line-height:1" ${
+    kycOk ? "" : "disabled"
+  }>⚙</button>
       </div>
       <p style="color:var(--text-muted);font-size:0.82rem;margin-bottom:1rem">
         Generate a payment code to request a transfer for the chosen asset.
@@ -244,6 +248,22 @@ async function paySurface(): Promise<HTMLElement> {
     </section>
 
     <section class="empty-state" style="margin-bottom:1.5rem">
+      <h2 style="margin:0 0 0.25rem;font-size:1rem">Deposit</h2>
+      <div class="form-row" style="margin:0.5rem 0 0">
+        <div class="form-group" style="margin-bottom:0;max-width:160px">
+          <label for="deposit-asset">Asset</label>
+          <select id="deposit-asset" style="width:100%;padding:0.6rem 0.75rem;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text)"></select>
+        </div>
+        <div class="form-group" style="margin-bottom:0">
+          <label for="deposit-amount">Amount</label>
+          <input id="deposit-amount" placeholder="0.00" />
+        </div>
+        <button id="deposit-btn" class="btn-primary" disabled>Deposit</button>
+      </div>
+      <div id="deposit-status"></div>
+    </section>
+
+    <section class="empty-state" style="margin-bottom:1.5rem">
       <h2 style="margin:0 0 0.25rem;font-size:1rem">Send</h2>
       <p style="color:var(--text-muted);font-size:0.82rem;margin-bottom:1rem">
         Paste the receiving keys someone shared with you. Sends spend your
@@ -255,7 +275,7 @@ async function paySurface(): Promise<HTMLElement> {
       </div>
       <div id="send-summary" class="hint-text" style="margin:0 0 1rem"></div>
       <button id="send-btn" class="btn-primary btn-wide" ${
-    channel ? "" : "disabled"
+    channel && kycOk ? "" : "disabled"
   }>Send</button>
       <p id="send-error" class="error-text" style="margin-top:0.75rem" hidden></p>
       <div id="send-status"></div>
@@ -300,7 +320,7 @@ async function paySurface(): Promise<HTMLElement> {
 
   const depositBtn = $<HTMLButtonElement>("#deposit-btn");
   const syncDepositBtn = () => {
-    let ok = !!channel;
+    let ok = !!channel && kycOk;
     if (ok) {
       try {
         const amount = toStroops($<HTMLInputElement>("#deposit-amount").value);
@@ -325,7 +345,7 @@ async function paySurface(): Promise<HTMLElement> {
   });
   const withdrawBtn = $<HTMLButtonElement>("#withdraw-btn");
   const syncWithdrawBtn = () => {
-    let ok = !!channel;
+    let ok = !!channel && kycOk;
     if (ok) {
       try {
         const amount = toStroops(
@@ -460,7 +480,7 @@ async function paySurface(): Promise<HTMLElement> {
     }
   };
   const syncCopyBtn = () => {
-    copyBtn.disabled = !requestInputsValid();
+    copyBtn.disabled = !kycOk || !requestInputsValid();
   };
   for (const sel of ["#request-amount", "#request-count", "#request-asset"]) {
     $(sel).addEventListener("input", syncCopyBtn);
@@ -520,7 +540,7 @@ async function paySurface(): Promise<HTMLElement> {
   });
 
   $("#send-btn").addEventListener("click", async () => {
-    if (!channel) return;
+    if (!channel || !kycOk) return;
     const btn = $<HTMLButtonElement>("#send-btn");
     const errEl = $("#send-error");
     const statusEl = $("#send-status");

@@ -242,6 +242,26 @@ pub async fn list_entity_channels(
     Ok(HttpResponse::Ok().json(Data::new(channels)))
 }
 
+/// The entity session's own approval state, plus the provider key so the
+/// UI can link to the KYC form. Powers the "cannot operate until KYC"
+/// banner — the submit-time approval gate above stays authoritative.
+#[get("/provider/entity/status")]
+pub async fn entity_status(
+    state: web::Data<AppState>,
+    auth: EntityAuth,
+) -> Result<impl Responder, ApiError> {
+    let entities = provider_stack_persistence::EntityRepo::new(state.pool.clone());
+    let entity = entities.find_by_id(&auth.0.sub).await?;
+    let approved = matches!(
+        entity.as_ref().map(|e| e.status),
+        Some(provider_stack_persistence::EntityStatus::Approved)
+    );
+    Ok(HttpResponse::Ok().json(Data::new(serde_json::json!({
+        "approved": approved,
+        "providerPublicKey": state.config.operator_public_key,
+    }))))
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EntityBundlesList {
