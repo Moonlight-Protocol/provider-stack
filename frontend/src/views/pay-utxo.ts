@@ -39,8 +39,8 @@ import {
 import {
   type BundleState,
   DEPOSIT_FEE,
-  EntityNotApprovedError,
   ensureTrustline,
+  EntityNotApprovedError,
   fromStroops,
   getBundle,
   getEntityChannels,
@@ -427,7 +427,9 @@ async function paySurface(): Promise<HTMLElement> {
       const selected = Number(depositAssetSelect.value) || 0;
       const order = channels
         .map((c, i) => ({ c, i }))
-        .sort((a, b) => (a.i === selected ? 1 : 0) - (b.i === selected ? 1 : 0));
+        .sort((a, b) =>
+          (a.i === selected ? 1 : 0) - (b.i === selected ? 1 : 0)
+        );
       for (const { c, i } of order) {
         await refreshBalances(c);
         assetBalances.set(i, balance());

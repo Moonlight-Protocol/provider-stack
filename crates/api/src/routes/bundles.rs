@@ -230,10 +230,7 @@ pub async fn list_entity_channels(
             let auth_id = m.channel_auth_id.clone();
             m.channels.into_iter().map(move |mut c| {
                 if let JsonValue::Object(ref mut map) = c {
-                    map.insert(
-                        "channelAuthId".into(),
-                        JsonValue::String(auth_id.clone()),
-                    );
+                    map.insert("channelAuthId".into(), JsonValue::String(auth_id.clone()));
                 }
                 c
             })
