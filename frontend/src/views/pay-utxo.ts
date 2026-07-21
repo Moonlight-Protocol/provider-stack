@@ -44,6 +44,7 @@ import {
   fromStroops,
   getBundle,
   getEntityChannels,
+  getEntityStatus,
   parseReceiverOps,
   prepareReceive,
   SEND_FEE,
