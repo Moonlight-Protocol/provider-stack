@@ -230,13 +230,12 @@ async function paySurface(): Promise<HTMLElement> {
           <label for="request-amount">Amount</label>
           <input id="request-amount" placeholder="0.00" />
         </div>
-        <button id="request-copy-btn" class="btn-primary" disabled>Copy to clipboard</button>
+        <button id="request-copy-btn" class="btn-primary" disabled>Copy</button>
       </div>
       <div id="request-advanced" class="form-group" style="margin:0.75rem 0 0" hidden>
         <label for="request-count">Number of UTXOs</label>
         <input id="request-count" value="3" style="max-width:140px" />
       </div>
-      <p id="request-status" class="hint-text" style="margin-top:0.75rem"></p>
       <p id="request-error" class="error-text" style="margin-top:0.75rem" hidden></p>
     </section>
 
@@ -370,7 +369,6 @@ async function paySurface(): Promise<HTMLElement> {
   let lastRequest = { key: "", code: "" };
   copyBtn.addEventListener("click", async () => {
     const errEl = $("#request-error");
-    const statusEl = $("#request-status");
     errEl.hidden = true;
     copyBtn.disabled = true;
     try {
@@ -383,16 +381,14 @@ async function paySurface(): Promise<HTMLElement> {
         capture("entity_receive_generated", { count });
       }
       await navigator.clipboard.writeText(lastRequest.code);
-      copyBtn.textContent = "Copied ✓";
-      statusEl.textContent =
-        "Payment code copied — share it with whoever is paying you.";
+      copyBtn.textContent = "Copied";
       setTimeout(() => {
-        copyBtn.textContent = "Copy to clipboard";
-      }, 2000);
+        copyBtn.textContent = "Copy";
+        syncCopyBtn();
+      }, 3000);
     } catch (e) {
       errEl.textContent = e instanceof Error ? e.message : String(e);
       errEl.hidden = false;
-    } finally {
       syncCopyBtn();
     }
   });
