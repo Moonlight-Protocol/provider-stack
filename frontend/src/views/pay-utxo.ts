@@ -194,7 +194,13 @@ async function paySurface(): Promise<HTMLElement> {
     channel ? "" : "disabled"
   }>⟳</button>
       </div>
-      <div class="form-row" style="margin:0.5rem 0 1rem">
+      <p id="balance-status" class="hint-text" style="margin:0 0 1rem"></p>
+      <div id="asset-list"></div>
+    </section>
+
+    <section class="empty-state" style="margin-bottom:1.5rem">
+      <h2 style="margin:0 0 0.25rem;font-size:1rem">Deposit</h2>
+      <div class="form-row" style="margin:0.5rem 0 0">
         <div class="form-group" style="margin-bottom:0;max-width:160px">
           <label for="deposit-asset">Asset</label>
           <select id="deposit-asset" style="width:100%;padding:0.6rem 0.75rem;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text)"></select>
@@ -205,8 +211,6 @@ async function paySurface(): Promise<HTMLElement> {
         </div>
         <button id="deposit-btn" class="btn-primary" disabled>Deposit</button>
       </div>
-      <p id="balance-status" class="hint-text" style="margin:0 0 1rem"></p>
-      <div id="asset-list"></div>
       <div id="deposit-status"></div>
     </section>
 
