@@ -34,7 +34,10 @@ fn strkey_to_string(pk: stellar_strkey::ed25519::PublicKey) -> String {
 }
 
 const NONCE_BYTES: usize = 48;
-const SEP10_FEE: u32 = 100;
+// SEP-10 mandates no fee — the challenge is never submitted, so the envelope
+// carries 0. A nonzero value only makes wallets display a phantom fee in the
+// signing prompt (and 100 was pure convention copied from the SDF reference).
+const SEP10_FEE: u32 = 0;
 
 /// Result of building a SEP-10 challenge envelope.
 #[derive(Debug, Clone)]

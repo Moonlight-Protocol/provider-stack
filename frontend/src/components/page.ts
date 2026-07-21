@@ -1,10 +1,6 @@
 import { renderNav } from "@moonlight/ui/nav";
 import { pageLayout } from "@moonlight/ui/layout";
-import {
-  checkMembershipStatus,
-  getPp,
-  isAuthenticated,
-} from "../lib/api.ts";
+import { checkMembershipStatus, getPp, isAuthenticated } from "../lib/api.ts";
 import { getConnectedAddress } from "../lib/wallet.ts";
 import { isAllowed } from "../lib/config.ts";
 import { navigate } from "../lib/router.ts";

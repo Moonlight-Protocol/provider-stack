@@ -60,7 +60,14 @@ pub async fn post_submit(
                 "failed to record rejected submitter interaction"
             );
         }
-        return Err(ApiError::Forbidden);
+        // Not-approved is an actionable state for the entity (register with
+        // this provider), unlike a generic 403 — name it and include the
+        // provider key so the UI can link straight to the KYC form.
+        return Ok(HttpResponse::Forbidden().json(serde_json::json!({
+            "error": "entity_not_approved",
+            "message": "This provider has not approved your account yet",
+            "providerPublicKey": state.config.operator_public_key,
+        })));
     }
 
     // UC5 removal gate. A PP removed from its council must stop accepting new
@@ -204,6 +211,52 @@ pub async fn post_submit(
         operations_bundle_id: id,
         status: "PENDING",
     })))
+}
+
+/// Channels of this PP's active council memberships, exposed to the entity
+/// session — same data the operator dashboard renders, resolved by
+/// `dashboard_pp::load_pp_memberships` (membership row → council-platform
+/// public endpoint). The entity payment surface auto-selects its channel
+/// from here instead of carrying contract IDs in the URL.
+#[get("/provider/entity/channels")]
+pub async fn list_entity_channels(
+    state: web::Data<AppState>,
+    _auth: EntityAuth,
+) -> Result<impl Responder, ApiError> {
+    let memberships = crate::routes::dashboard_pp::load_pp_memberships(&state).await?;
+    let channels: Vec<JsonValue> = memberships
+        .into_iter()
+        .flat_map(|m| {
+            let auth_id = m.channel_auth_id.clone();
+            m.channels.into_iter().map(move |mut c| {
+                if let JsonValue::Object(ref mut map) = c {
+                    map.insert("channelAuthId".into(), JsonValue::String(auth_id.clone()));
+                }
+                c
+            })
+        })
+        .collect();
+    Ok(HttpResponse::Ok().json(Data::new(channels)))
+}
+
+/// The entity session's own approval state, plus the provider key so the
+/// UI can link to the KYC form. Powers the "cannot operate until KYC"
+/// banner — the submit-time approval gate above stays authoritative.
+#[get("/provider/entity/status")]
+pub async fn entity_status(
+    state: web::Data<AppState>,
+    auth: EntityAuth,
+) -> Result<impl Responder, ApiError> {
+    let entities = provider_stack_persistence::EntityRepo::new(state.pool.clone());
+    let entity = entities.find_by_id(&auth.0.sub).await?;
+    let approved = matches!(
+        entity.as_ref().map(|e| e.status),
+        Some(provider_stack_persistence::EntityStatus::Approved)
+    );
+    Ok(HttpResponse::Ok().json(Data::new(serde_json::json!({
+        "approved": approved,
+        "providerPublicKey": state.config.operator_public_key,
+    }))))
 }
 
 #[derive(Serialize)]

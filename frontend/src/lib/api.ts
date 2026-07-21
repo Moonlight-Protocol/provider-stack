@@ -232,7 +232,9 @@ export interface CouncilMembership {
   createdAt: string;
 }
 
-export async function getCouncilMembership(): Promise<CouncilMembership | null> {
+export async function getCouncilMembership(): Promise<
+  CouncilMembership | null
+> {
   const res = await platformFetch("/provider/council/membership");
   if (!res.ok) throw new Error("Failed to retrieve membership");
   const { data } = await res.json();

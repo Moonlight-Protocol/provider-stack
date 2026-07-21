@@ -59,6 +59,8 @@ async function writeConfigJs(): Promise<void> {
     `// Edit to match your deployment; the SPA reads window.__CONSOLE_CONFIG__.\n` +
     `window.__CONSOLE_CONFIG__ = {\n` +
     `  apiBaseUrl: "/api/v1",\n` +
+    `  stellarNetwork: "standalone",\n` +
+    `  allowlist: ["*"],\n` +
     `};\n`;
   await Deno.writeTextFile(CONFIG_OUT, body);
   console.log("Built public/config.js");
@@ -152,7 +154,7 @@ await esbuild.build({
       setup(build: esbuild.PluginBuild) {
         const sdkLib = resolve(
           PROJECT_ROOT,
-          "node_modules/.deno/@stellar+stellar-sdk@15.0.1/node_modules/@stellar/stellar-sdk/lib/index.js",
+          "node_modules/.deno/@stellar+stellar-sdk@15.1.0/node_modules/@stellar/stellar-sdk/lib/index.js",
         );
         build.onLoad(
           { filter: /stellar-sdk[/\\]dist[/\\]/ },
@@ -183,15 +185,12 @@ appJs = appJs.replace(
     `if(${varName}==="buffer")return globalThis.__buffer_polyfill;throw ${errExpr}`,
 );
 
-// 2. Remove bare ESM buffer imports
+// 2+3. Replace ESM buffer imports (bare and node:) with polyfill vars.
+// Alias-aware: esbuild renames colliding imports (`Buffer as Buffer18`), so a
+// plain removal would leave the renamed references dangling — every imported
+// name must get a `var` bound to the polyfill.
 appJs = appJs.replace(
-  /import\s*\{[^}]*\}\s*from\s*"(?:node:)?buffer"\s*;?/g,
-  "",
-);
-
-// 3. Replace node:buffer imports with polyfill reference
-appJs = appJs.replace(
-  /import\s*\{([^}]*)\}\s*from\s*"node:buffer"\s*;?/g,
+  /import\s*\{([^}]*)\}\s*from\s*"(?:node:)?buffer"\s*;?/g,
   (_match, names) => {
     const exports = names.split(",").map((n: string) => n.trim()).filter(
       Boolean,
@@ -201,9 +200,6 @@ appJs = appJs.replace(
         s.trim()
       );
       const localName = alias || original;
-      if (original === "Buffer") {
-        return `var ${localName} = globalThis.__buffer_polyfill.Buffer;`;
-      }
       return `var ${localName} = globalThis.__buffer_polyfill.${original};`;
     }).join("\n");
   },
