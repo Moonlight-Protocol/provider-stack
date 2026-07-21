@@ -152,6 +152,15 @@ export interface BundleState {
   failureDetail: unknown;
 }
 
+/** The provider rejected the submitter: not a registered/approved entity. */
+export class EntityNotApprovedError extends Error {
+  providerPublicKey: string;
+  constructor(providerPublicKey: string) {
+    super("This provider has not approved your account yet");
+    this.providerPublicKey = providerPublicKey;
+  }
+}
+
 async function submitBundle(
   operationsMLXDR: string[],
   channelContractId: string,
@@ -162,6 +171,9 @@ async function submitBundle(
   });
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
+    if (body.error === "entity_not_approved") {
+      throw new EntityNotApprovedError(body.providerPublicKey ?? "");
+    }
     throw new Error(
       body.message || `Bundle submission failed: ${res.status}`,
     );

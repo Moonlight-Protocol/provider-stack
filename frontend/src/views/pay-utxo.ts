@@ -39,6 +39,7 @@ import {
 import {
   type BundleState,
   DEPOSIT_FEE,
+  EntityNotApprovedError,
   fromStroops,
   getBundle,
   getEntityChannels,
@@ -143,6 +144,20 @@ function pollBundle(
   return () => {
     stopped = true;
   };
+}
+
+/**
+ * Not-approved is actionable: link the entity straight to this provider's
+ * KYC form instead of echoing a bare 403.
+ */
+function notApprovedHtml(providerPublicKey: string): string {
+  const href = `#/entities/register?provider=${
+    encodeURIComponent(providerPublicKey)
+  }`;
+  return `<p class="error-text" style="margin-top:1rem">
+    This provider hasn't approved your account yet.
+    <a href="${href}">Complete the registration form</a>, then come back
+    and try again.</p>`;
 }
 
 function signOut(): void {
@@ -325,10 +340,9 @@ async function paySurface(): Promise<HTMLElement> {
       });
       onCleanup(stop);
     } catch (e) {
-      statusEl.innerHTML = stepperHtml(
-        null,
-        e instanceof Error ? e.message : String(e),
-      );
+      statusEl.innerHTML = e instanceof EntityNotApprovedError
+        ? notApprovedHtml(e.providerPublicKey)
+        : stepperHtml(null, e instanceof Error ? e.message : String(e));
       btn.disabled = false;
     }
   });
@@ -446,8 +460,12 @@ async function paySurface(): Promise<HTMLElement> {
       });
       onCleanup(stop);
     } catch (e) {
-      errEl.textContent = e instanceof Error ? e.message : String(e);
-      errEl.hidden = false;
+      if (e instanceof EntityNotApprovedError) {
+        statusEl.innerHTML = notApprovedHtml(e.providerPublicKey);
+      } else {
+        errEl.textContent = e instanceof Error ? e.message : String(e);
+        errEl.hidden = false;
+      }
       btn.disabled = false;
     }
   });

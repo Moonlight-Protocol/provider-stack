@@ -60,7 +60,14 @@ pub async fn post_submit(
                 "failed to record rejected submitter interaction"
             );
         }
-        return Err(ApiError::Forbidden);
+        // Not-approved is an actionable state for the entity (register with
+        // this provider), unlike a generic 403 — name it and include the
+        // provider key so the UI can link straight to the KYC form.
+        return Ok(HttpResponse::Forbidden().json(serde_json::json!({
+            "error": "entity_not_approved",
+            "message": "This provider has not approved your account yet",
+            "providerPublicKey": state.config.operator_public_key,
+        })));
     }
 
     // UC5 removal gate. A PP removed from its council must stop accepting new
