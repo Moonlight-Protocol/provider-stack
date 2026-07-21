@@ -53,11 +53,11 @@ import {
 import {
   balance,
   clearDerivation,
-  fundedCount,
   initEntitySeed,
   isSeedReady,
   refreshBalances,
 } from "../lib/utxo-derivation.ts";
+import { getNativeBalance } from "../lib/horizon.ts";
 import { capture } from "../lib/analytics.ts";
 import { escapeHtml } from "../lib/dom.ts";
 import { navigate, onCleanup } from "../lib/router.ts";
@@ -188,43 +188,25 @@ async function paySurface(): Promise<HTMLElement> {
   content.style.maxWidth = "680px";
   content.innerHTML = `
     <section class="empty-state" style="margin:1.5rem 0">
-      <h2 style="margin:0 0 0.25rem;font-size:1rem">Balance</h2>
-      <p style="color:var(--text-muted);font-size:0.82rem;margin-bottom:1rem">
-        Your funds in the privacy channel, from the keys derived off your
-        wallet — the same set every visit.
-      </p>
-      <div class="stats-row" style="margin:0 0 1.25rem">
-        <div class="stat-card active">
-          <span class="stat-label">Channel balance</span>
-          <span class="stat-value" id="balance-value" style="font-variant-numeric:tabular-nums">—</span>
-        </div>
-        <div class="stat-card">
-          <span class="stat-label">Funded UTXOs</span>
-          <span class="stat-value" id="utxo-count">—</span>
-        </div>
-        <div class="stat-card">
-          <span class="stat-label">Channel</span>
-          <span class="stat-value mono" style="font-size:0.8rem">${
-    channel ? escapeHtml(shortId(channel.channelContractId)) : "—"
-  }</span>
-        </div>
+      <div style="display:flex;justify-content:space-between;align-items:baseline">
+        <h2 style="margin:0 0 0.25rem;font-size:1rem">Balance</h2>
+        <button id="refresh-btn" class="btn-link" title="Refresh balances" aria-label="Refresh balances" style="font-size:1rem;line-height:1" ${
+    channel ? "" : "disabled"
+  }>⟳</button>
       </div>
-      <p id="balance-status" class="hint-text" style="margin:0 0 1rem"></p>
-      <div class="form-row">
+      <div class="form-row" style="margin:0.5rem 0 1rem">
+        <div class="form-group" style="margin-bottom:0;max-width:160px">
+          <label for="deposit-asset">Asset</label>
+          <select id="deposit-asset" style="width:100%;padding:0.6rem 0.75rem;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text)"></select>
+        </div>
         <div class="form-group" style="margin-bottom:0">
-          <label for="deposit-amount">Amount to deposit (XLM)</label>
+          <label for="deposit-amount">Amount</label>
           <input id="deposit-amount" placeholder="0.00" />
         </div>
-        <button id="deposit-btn" class="btn-primary" ${
-    channel ? "" : "disabled"
-  }>Deposit</button>
-        <button id="refresh-btn" class="btn-link" ${
-    channel ? "" : "disabled"
-  }>Refresh</button>
+        <button id="deposit-btn" class="btn-primary" disabled>Deposit</button>
       </div>
-      <p class="hint-text">The wallet asks for one signature authorizing the
-      transfer into the channel (fee ${fromStroops(DEPOSIT_FEE)} XLM). The
-      deposit lands on the next free derived key.</p>
+      <p id="balance-status" class="hint-text" style="margin:0 0 1rem"></p>
+      <div id="asset-list"></div>
       <div id="deposit-status"></div>
     </section>
 
@@ -277,11 +259,50 @@ async function paySurface(): Promise<HTMLElement> {
   const $ = <T extends HTMLElement>(sel: string) =>
     content.querySelector(sel) as T;
 
-  // ── Balance: derive keys + on-chain refresh ──
-  const refreshUI = () => {
-    $("#balance-value").textContent = `${fromStroops(balance())} XLM`;
-    $("#utxo-count").textContent = String(fundedCount());
+  // ── Balance: per-asset channel balances + wallet funds ──
+  const depositAssetSelect = $<HTMLSelectElement>("#deposit-asset");
+  channels.forEach((c, i) => {
+    const opt = document.createElement("option");
+    opt.value = String(i);
+    opt.textContent = c.assetCode || c.label || shortId(c.assetContractId);
+    depositAssetSelect.appendChild(opt);
+  });
+
+  // Wallet-side XLM balance (stroops) — deposits are gated on it.
+  let walletBalance = 0n;
+  const assetBalances = new Map<number, bigint>();
+
+  const depositBtn = $<HTMLButtonElement>("#deposit-btn");
+  const syncDepositBtn = () => {
+    let ok = !!channel;
+    if (ok) {
+      try {
+        const amount = toStroops($<HTMLInputElement>("#deposit-amount").value);
+        ok = amount > 0n && amount + DEPOSIT_FEE <= walletBalance;
+      } catch {
+        ok = false;
+      }
+    }
+    depositBtn.disabled = !ok;
   };
+  $("#deposit-amount").addEventListener("input", syncDepositBtn);
+  $("#deposit-asset").addEventListener("input", syncDepositBtn);
+
+  const refreshUI = () => {
+    $("#asset-list").innerHTML = channels.map((c, i) => {
+      const code = escapeHtml(
+        c.assetCode || c.label || shortId(c.assetContractId),
+      );
+      const bal = assetBalances.get(i);
+      return `<div style="display:flex;justify-content:space-between;align-items:center;padding:0.55rem 0;border-top:1px solid var(--border)">
+        <span>${code}</span>
+        <span style="font-variant-numeric:tabular-nums">${
+        bal === undefined ? "—" : escapeHtml(fromStroops(bal))
+      }</span>
+      </div>`;
+    }).join("");
+  };
+  refreshUI();
 
   const loadBalances = async () => {
     if (!channel) {
@@ -296,13 +317,24 @@ async function paySurface(): Promise<HTMLElement> {
         statusEl.textContent = "No derived keys — sign out and back in.";
         return;
       }
-      statusEl.textContent = "Checking the channel for your UTXOs…";
-      await refreshBalances(channel);
+      statusEl.textContent = "Checking your balances…";
+      const address = getEntityAddress();
+      if (address) walletBalance = await getNativeBalance(address);
+      // Refresh every asset's channel; the deposit-selected one last, so
+      // reserve/spend state is left pointing at it.
+      const selected = Number(depositAssetSelect.value) || 0;
+      const order = channels
+        .map((c, i) => ({ c, i }))
+        .sort((a, b) => (a.i === selected ? 1 : 0) - (b.i === selected ? 1 : 0));
+      for (const { c, i } of order) {
+        await refreshBalances(c);
+        assetBalances.set(i, balance());
+      }
       statusEl.textContent = "";
       refreshUI();
+      syncDepositBtn();
     } catch (e) {
       statusEl.textContent = "";
-      $("#balance-value").textContent = "—";
       const msg = e instanceof Error ? e.message : String(e);
       $("#deposit-status").innerHTML = stepperHtml(null, msg);
     }
@@ -312,18 +344,18 @@ async function paySurface(): Promise<HTMLElement> {
   $("#refresh-btn").addEventListener("click", () => loadBalances());
 
   // ── Deposit ──
-  $("#deposit-btn").addEventListener("click", async () => {
-    if (!channel) return;
-    const btn = $<HTMLButtonElement>("#deposit-btn");
+  depositBtn.addEventListener("click", async () => {
+    const depositChannel = channels[Number(depositAssetSelect.value) || 0];
+    if (!depositChannel) return;
+    const btn = depositBtn;
     const statusEl = $("#deposit-status");
     btn.disabled = true;
     try {
-      if (!isSeedReady()) await loadBalances();
       const amount = toStroops($<HTMLInputElement>("#deposit-amount").value);
       if (amount <= 0n) throw new Error("Enter a deposit amount");
       statusEl.innerHTML =
         `<p class="hint-text">Waiting for the wallet signature…</p>`;
-      const bundleId = await submitDeposit(amount, channel);
+      const bundleId = await submitDeposit(amount, depositChannel);
       capture("entity_deposit_submitted", { bundleId });
       const stop = pollBundle(bundleId, (state) => {
         statusEl.innerHTML = stepperHtml(state);
@@ -331,19 +363,19 @@ async function paySurface(): Promise<HTMLElement> {
           state.status === "COMPLETED" || state.status === "FAILED" ||
           state.status === "EXPIRED"
         ) {
-          btn.disabled = false;
+          syncDepositBtn();
           if (state.status === "COMPLETED") loadBalances();
         }
       }, (err) => {
         statusEl.innerHTML = stepperHtml(null, err);
-        btn.disabled = false;
+        syncDepositBtn();
       });
       onCleanup(stop);
     } catch (e) {
       statusEl.innerHTML = e instanceof EntityNotApprovedError
         ? notApprovedHtml(e.providerPublicKey)
         : stepperHtml(null, e instanceof Error ? e.message : String(e));
-      btn.disabled = false;
+      syncDepositBtn();
     }
   });
 
