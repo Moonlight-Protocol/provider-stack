@@ -362,6 +362,137 @@ pub fn extract_user_spend_signatures(
     Ok(out)
 }
 
+/// The 65-byte UTXO pubkey of a Spend slot whose signature wrapper is still
+/// empty (`ScVal::Vec([])`, the unsigned encoding at
+/// `moonlight-sdk/src/custom-xdr/index.ts:171`) — `None` for non-Spend slots
+/// and for spends that already carry a signature.
+pub fn unsigned_spend_utxo(mlxdr_b64: &str) -> Result<Option<[u8; 65]>, MlxdrError> {
+    let bytes = B64
+        .decode(mlxdr_b64)
+        .map_err(|e| MlxdrError::Base64(e.to_string()))?;
+    if bytes.len() < 3 {
+        return Err(MlxdrError::TooShort);
+    }
+    if bytes[0..2] != ML_PREFIX {
+        return Err(MlxdrError::MissingPrefix);
+    }
+    if OperationKind::from_type_byte(bytes[2])? != OperationKind::Spend {
+        return Ok(None);
+    }
+    let outer =
+        ScVal::from_xdr(&bytes[3..], Limits::none()).map_err(|e| MlxdrError::Xdr(e.to_string()))?;
+    let scvec = match outer {
+        ScVal::Vec(Some(v)) => v.0,
+        _ => return Err(MlxdrError::BadShape("outer must be ScVec(Some(..))")),
+    };
+    let unsigned = match scvec.get(1) {
+        Some(ScVal::Vec(Some(v))) => v.0.is_empty(),
+        None => true,
+        _ => false,
+    };
+    if !unsigned {
+        return Ok(None);
+    }
+    let payload = match scvec.first() {
+        Some(ScVal::Vec(Some(v))) => v.0.clone(),
+        _ => return Err(MlxdrError::BadShape("Spend payload must be Vec")),
+    };
+    let utxo = match payload.first() {
+        Some(ScVal::Bytes(b)) => b.0.as_slice().to_vec(),
+        _ => return Err(MlxdrError::BadShape("Spend.utxo must be ScBytes")),
+    };
+    let pk65: [u8; 65] = utxo
+        .try_into()
+        .map_err(|_| MlxdrError::BadShape("Spend.utxo must be 65 bytes"))?;
+    Ok(Some(pk65))
+}
+
+/// Sign an unsigned Spend slot with a caller-supplied P-256 signer (the
+/// provider's holding key for send-via-email spends) and re-encode it.
+///
+/// The signed preimage is the client-parity AuthPayload construction
+/// ([`crate::holding::auth_payload_preimage`]) over the slot's own conditions
+/// ScVal, taken verbatim — recomputing conditions would risk byte drift. The
+/// signature wrapper becomes `ScVal::Vec([I128(exp), Bytes(sig)])`, exactly
+/// what [`extract_user_spend_signatures`] reads back at execute time.
+pub fn sign_spend_slot(
+    mlxdr_b64: &str,
+    channel_contract_strkey: &str,
+    exp: u32,
+    sign: impl FnOnce(&[u8]) -> [u8; 64],
+) -> Result<String, MlxdrError> {
+    use soroban_client::xdr::{Int128Parts, ScBytes, ScVec, VecM, WriteXdr};
+
+    let bytes = B64
+        .decode(mlxdr_b64)
+        .map_err(|e| MlxdrError::Base64(e.to_string()))?;
+    if bytes.len() < 3 {
+        return Err(MlxdrError::TooShort);
+    }
+    if bytes[0..2] != ML_PREFIX {
+        return Err(MlxdrError::MissingPrefix);
+    }
+    if OperationKind::from_type_byte(bytes[2])? != OperationKind::Spend {
+        return Err(MlxdrError::BadShape("only Spend slots can be UTXO-signed"));
+    }
+    let outer =
+        ScVal::from_xdr(&bytes[3..], Limits::none()).map_err(|e| MlxdrError::Xdr(e.to_string()))?;
+    let scvec = match outer {
+        ScVal::Vec(Some(v)) => v.0,
+        _ => return Err(MlxdrError::BadShape("outer must be ScVec(Some(..))")),
+    };
+    let payload_scval = scvec
+        .first()
+        .cloned()
+        .ok_or(MlxdrError::BadShape("outer ScVec is empty"))?;
+    let conditions = match &payload_scval {
+        ScVal::Vec(Some(v)) if v.0.len() >= 2 => v.0[1].clone(),
+        _ => {
+            return Err(MlxdrError::BadShape(
+                "Spend payload must be [utxo, conditions]",
+            ))
+        }
+    };
+    match &conditions {
+        ScVal::Vec(Some(v)) if !v.0.is_empty() => {}
+        _ => return Err(MlxdrError::BadShape("Spend must carry ≥1 condition")),
+    }
+    let conditions_xdr = conditions
+        .to_xdr(Limits::none())
+        .map_err(|e| MlxdrError::Xdr(format!("conditions to_xdr: {e}")))?;
+
+    let preimage =
+        crate::holding::auth_payload_preimage(channel_contract_strkey, &conditions_xdr, exp);
+    let sig = sign(&preimage);
+
+    let sig_bytes: soroban_client::xdr::BytesM = sig
+        .to_vec()
+        .try_into()
+        .map_err(|e: soroban_client::xdr::Error| MlxdrError::Xdr(format!("BytesM sig: {e}")))?;
+    let sig_scval = ScVal::Vec(Some(ScVec(
+        VecM::try_from(vec![
+            ScVal::I128(Int128Parts {
+                hi: 0,
+                lo: exp as u64,
+            }),
+            ScVal::Bytes(ScBytes(sig_bytes)),
+        ])
+        .map_err(|e| MlxdrError::Xdr(format!("VecM sig wrapper: {e}")))?,
+    )));
+    let new_outer = ScVal::Vec(Some(ScVec(
+        VecM::try_from(vec![payload_scval, sig_scval])
+            .map_err(|e| MlxdrError::Xdr(format!("VecM outer: {e}")))?,
+    )));
+
+    let mut out = vec![ML_PREFIX[0], ML_PREFIX[1], 0x05];
+    out.extend(
+        new_outer
+            .to_xdr(Limits::none())
+            .map_err(|e| MlxdrError::Xdr(format!("outer to_xdr: {e}")))?,
+    );
+    Ok(B64.encode(out))
+}
+
 /// Build an extra `Create` operation tuple to inject as the PP's fee UTXO.
 /// The privacy channel contract enforces `total_deposit + spend = total_create + total_withdraw`;
 /// the difference (the fee) has to land somewhere or it's `UnbalancedBundle`. The Deno reference

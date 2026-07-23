@@ -96,7 +96,7 @@ pub async fn post_submit(
     }
 
     let SubmitReq {
-        operations_mlxdr,
+        mut operations_mlxdr,
         channel_contract_id,
     } = body.into_inner();
 
@@ -111,6 +111,97 @@ pub async fn post_submit(
             "bundle exceeds BUNDLE_MAX_OPERATIONS ({})",
             state.config.bundle_max_operations
         )));
+    }
+
+    // Send-via-email (#/pay-name): spend slots that arrive unsigned must
+    // reference provider-held UTXOs derived for the submitter's registered
+    // email — nobody else may direct those funds. Sign them in place so the
+    // rest of the pipeline (and the executor's signature extraction) sees a
+    // fully signed bundle; the client never handles holding keys.
+    {
+        let mut unsigned: Vec<(usize, [u8; 65])> = Vec::new();
+        if let Some(arr) = operations_mlxdr.as_array() {
+            for (i, v) in arr.iter().enumerate() {
+                if let Some(s) = v.as_str() {
+                    if let Some(pk) = provider_stack_core::mlxdr::unsigned_spend_utxo(s)
+                        .map_err(|e| ApiError::BadRequest(format!("operationsMLXDR: {e}")))?
+                    {
+                        unsigned.push((i, pk));
+                    }
+                }
+            }
+        }
+        if !unsigned.is_empty() {
+            let channel = channel_contract_id.as_deref().ok_or_else(|| {
+                ApiError::BadRequest(
+                    "channelContractId is required when bundle contains Spend ops".into(),
+                )
+            })?;
+            let email = approval
+                .as_ref()
+                .and_then(|e| e.name.clone())
+                .filter(|n| !n.trim().is_empty())
+                .ok_or_else(|| {
+                    ApiError::BadRequest(
+                        "unsigned spends require a registered email on your account".into(),
+                    )
+                })?;
+
+            // Match each unsigned spend against the submitter's holding
+            // sequence, extending the derivation lazily. Same cap as the
+            // holding scan endpoints.
+            const HOLDING_MATCH_CAP: usize = 200;
+            let mut keys: Vec<provider_stack_core::holding::HoldingKey> = Vec::new();
+            let mut resolved: Vec<(usize, usize)> = Vec::new();
+            for (slot_idx, pk) in &unsigned {
+                let mut found = keys.iter().position(|k| &k.pubkey65 == pk);
+                while found.is_none() && keys.len() < HOLDING_MATCH_CAP {
+                    let next = provider_stack_core::holding::derive_holding_key(
+                        &state.config.pp_secret_key,
+                        &email,
+                        keys.len() as u32,
+                    )
+                    .map_err(|e| ApiError::Internal(format!("holding derivation: {e}")))?;
+                    if next.pubkey65 == *pk {
+                        found = Some(keys.len());
+                    }
+                    keys.push(next);
+                }
+                let key_idx = found.ok_or_else(|| {
+                    ApiError::BadRequest(
+                        "unsigned spend does not reference a UTXO held for your account".into(),
+                    )
+                })?;
+                resolved.push((*slot_idx, key_idx));
+            }
+
+            let server = crate::routes::holding::rpc_server(&state)?;
+            let latest = server
+                .get_latest_ledger()
+                .await
+                .map_err(|e| ApiError::Internal(format!("get_latest_ledger: {e:?}")))?;
+            let exp = latest
+                .sequence
+                .saturating_add(state.config.transaction_expiration_offset);
+
+            let signed_count = resolved.len();
+            let arr = operations_mlxdr
+                .as_array_mut()
+                .expect("op_count > 0 validated above");
+            for (slot_idx, key_idx) in resolved {
+                let slot = arr[slot_idx]
+                    .as_str()
+                    .expect("unsigned slots are strings")
+                    .to_string();
+                let signed =
+                    provider_stack_core::mlxdr::sign_spend_slot(&slot, channel, exp, |pre| {
+                        provider_stack_core::holding::sign_auth_payload(&keys[key_idx].signing, pre)
+                    })
+                    .map_err(|e| ApiError::BadRequest(format!("operationsMLXDR: {e}")))?;
+                arr[slot_idx] = JsonValue::String(signed);
+            }
+            tracing::info!(signed_count, exp, "signed held spends for submitter");
+        }
     }
 
     tracing::info!(op_count, "bundle submission accepted");
