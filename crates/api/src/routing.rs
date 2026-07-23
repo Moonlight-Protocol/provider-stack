@@ -21,6 +21,8 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
             .service(routes::council::get_membership)
             .service(routes::council::post_membership)
             .service(routes::bundles::post_submit)
+            .service(routes::holding::get_targets)
+            .service(routes::holding::get_held)
             .service(routes::bundles::list_entity_channels)
             .service(routes::bundles::entity_status)
             .service(routes::bundles::list_entity)

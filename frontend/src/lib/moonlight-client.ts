@@ -39,6 +39,7 @@ import { getNetworkPassphrase } from "./wallet.ts";
 import {
   type ChannelIds,
   type DerivedUtxo,
+  fundedUtxos,
   reserveFreeUtxos,
   selectFunded,
 } from "./utxo-derivation.ts";
@@ -450,16 +451,21 @@ export async function ensureTrustline(channel: ChannelIds): Promise<void> {
  * wallet popup: SPENDs are P256-signed in memory (ensureTrustline may raise
  * one first, for a classic asset's first withdraw). Bundle order matches
  * the reference client: WITHDRAW, change CREATE, SPENDs.
+ *
+ * `held` (the #/pay-name surface) lets the withdraw also draw on UTXOs the
+ * provider holds for this entity's email — their SPENDs go up unsigned and
+ * the provider signs them at submit, transparently.
  */
 export async function submitWithdraw(
   amount: bigint,
   channel: ChannelIds,
+  held: HeldUtxo[] = [],
 ): Promise<string> {
   const account = getEntityAddress();
   if (!account) throw new Error("Wallet not connected");
 
   const totalToSpend = amount + WITHDRAW_FEE;
-  const selection = selectFunded(totalToSpend);
+  const selection = selectAcrossPools(totalToSpend, held);
   if (!selection) {
     throw new Error(
       `Insufficient balance: need ${fromStroops(totalToSpend)} (incl. ${
@@ -473,7 +479,7 @@ export async function submitWithdraw(
     amount,
   );
 
-  const createOps = [];
+  const createOps: MoonlightOperation[] = [];
   if (selection.change > 0n) {
     const [changeTarget] = await reserveFreeUtxos(1);
     createOps.push(
@@ -485,30 +491,186 @@ export async function submitWithdraw(
   }
 
   const expiration = (await getLatestLedger()) + 1000;
-
-  const spendOps = [];
-  for (const utxo of selection.selected) {
-    let spendOp = MoonlightOperation.spend(utxo.keypair.publicKey);
-    spendOp = spendOp.addCondition(withdrawOp.toCondition());
-    for (const createOp of createOps) {
-      spendOp = spendOp.addCondition(createOp.toCondition());
-    }
-    utxo.reserved = true;
-    spendOps.push(
-      await spendOp.signWithUTXO(
-        utxo.keypair,
-        channel.channelContractId as `C${string}`,
-        expiration,
-      ),
-    );
-  }
+  const spendMLXDRs = await buildSpendMLXDRs(
+    selection,
+    [withdrawOp, ...createOps],
+    channel,
+    expiration,
+  );
 
   return await submitBundle(
     [
       withdrawOp.toMLXDR(),
       ...createOps.map((op) => op.toMLXDR()),
-      ...spendOps.map((op) => op.toMLXDR()),
+      ...spendMLXDRs,
     ],
     channel.channelContractId,
   );
+}
+
+// ── Held UTXOs (send-via-email, #/pay-name) ────────────────────
+
+/**
+ * A UTXO the provider holds for this entity's registered email. The provider
+ * derived the key (crates/core/src/holding.rs) — only it can sign the spend,
+ * which it does transparently when a bundle arrives with the spend unsigned.
+ */
+export interface HeldUtxo {
+  pubkey: Uint8Array;
+  amount: bigint;
+}
+
+/** Funded UTXOs the provider holds for the signed-in entity's email. */
+export async function fetchHeldUtxos(channel: ChannelIds): Promise<HeldUtxo[]> {
+  const res = await entityFetch(
+    `/provider/entity/holding?channel=${
+      encodeURIComponent(channel.channelContractId)
+    }`,
+  );
+  if (!res.ok) throw new Error(`Held UTXO lookup failed: ${res.status}`);
+  const { data } = await res.json();
+  return (data.utxos as Array<{ utxo: string; amount: string }>).map((u) => ({
+    pubkey: Uint8Array.from(atob(u.utxo), (c) => c.charCodeAt(0)),
+    amount: BigInt(u.amount),
+  }));
+}
+
+/**
+ * Never-used holding UTXO pubkeys for `email` — the CREATE targets of a
+ * send-to-email. The provider derives them on the spot; the email does not
+ * need to belong to a registered entity yet.
+ */
+async function fetchPayTargets(
+  email: string,
+  channel: ChannelIds,
+  count: number,
+): Promise<Uint8Array[]> {
+  const res = await entityFetch(
+    `/provider/entity/holding/targets?email=${encodeURIComponent(email)}` +
+      `&channel=${encodeURIComponent(channel.channelContractId)}` +
+      `&count=${count}`,
+  );
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.message || `Recipient lookup failed: ${res.status}`);
+  }
+  const { data } = await res.json();
+  return (data.utxos as string[]).map((u) =>
+    Uint8Array.from(atob(u), (c) => c.charCodeAt(0))
+  );
+}
+
+interface PoolSelection {
+  own: DerivedUtxo[];
+  held: HeldUtxo[];
+  change: bigint;
+}
+
+/** Greedy selection: own funded keys first, provider-held ones after. */
+function selectAcrossPools(
+  total: bigint,
+  held: HeldUtxo[],
+): PoolSelection | null {
+  const own: DerivedUtxo[] = [];
+  const heldSel: HeldUtxo[] = [];
+  let acc = 0n;
+  for (const u of fundedUtxos()) {
+    if (acc >= total) break;
+    own.push(u);
+    acc += u.balance;
+  }
+  for (const h of held) {
+    if (acc >= total) break;
+    heldSel.push(h);
+    acc += h.amount;
+  }
+  if (acc < total) return null;
+  return { own, held: heldSel, change: acc - total };
+}
+
+/**
+ * SPEND MLXDRs over both pools, every spend conditioned on every output op.
+ * Own keys sign in memory as usual; held keys go up UNSIGNED — the provider
+ * recognises its holding keys at submit and signs them server-side.
+ */
+async function buildSpendMLXDRs(
+  selection: PoolSelection,
+  conditionOps: MoonlightOperation[],
+  channel: ChannelIds,
+  expiration: number,
+): Promise<string[]> {
+  const out: string[] = [];
+  for (const utxo of selection.own) {
+    let spendOp = MoonlightOperation.spend(utxo.keypair.publicKey);
+    for (const op of conditionOps) {
+      spendOp = spendOp.addCondition(op.toCondition());
+    }
+    utxo.reserved = true;
+    out.push(
+      (await spendOp.signWithUTXO(
+        utxo.keypair,
+        channel.channelContractId as `C${string}`,
+        expiration,
+      )).toMLXDR(),
+    );
+  }
+  for (const h of selection.held) {
+    let spendOp = MoonlightOperation.spend(h.pubkey);
+    for (const op of conditionOps) {
+      spendOp = spendOp.addCondition(op.toCondition());
+    }
+    out.push(spendOp.toMLXDR());
+  }
+  return out;
+}
+
+/**
+ * Send `amount` stroops to `email`: the provider hands out a never-used
+ * holding UTXO derived for that email, the payer CREATEs onto it and SPENDs
+ * from own + held funds. Change returns to the payer's own derived keys —
+ * spending held funds migrates the remainder into self-custody.
+ */
+export async function submitSendToEmail(
+  email: string,
+  amount: bigint,
+  channel: ChannelIds,
+  held: HeldUtxo[] = [],
+): Promise<{ bundleId: string }> {
+  if (!email.trim()) throw new Error("Enter the recipient's email");
+
+  const totalToSpend = amount + SEND_FEE;
+  const selection = selectAcrossPools(totalToSpend, held);
+  if (!selection) {
+    throw new Error(
+      `Insufficient balance: need ${fromStroops(totalToSpend)} (incl. ${
+        fromStroops(SEND_FEE)
+      } fee)`,
+    );
+  }
+
+  const [target] = await fetchPayTargets(email.trim(), channel, 1);
+  const createOps = [MoonlightOperation.create(target, amount)];
+  if (selection.change > 0n) {
+    const [changeTarget] = await reserveFreeUtxos(1);
+    createOps.push(
+      MoonlightOperation.create(
+        changeTarget.keypair.publicKey,
+        selection.change,
+      ),
+    );
+  }
+
+  const expiration = (await getLatestLedger()) + 1000;
+  const spendMLXDRs = await buildSpendMLXDRs(
+    selection,
+    createOps,
+    channel,
+    expiration,
+  );
+
+  const bundleId = await submitBundle(
+    [...createOps.map((op) => op.toMLXDR()), ...spendMLXDRs],
+    channel.channelContractId,
+  );
+  return { bundleId };
 }

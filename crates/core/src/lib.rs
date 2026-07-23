@@ -6,5 +6,6 @@ pub mod bundle;
 pub mod config;
 pub mod error;
 pub mod events;
+pub mod holding;
 pub mod mlxdr;
 pub mod pipelines;

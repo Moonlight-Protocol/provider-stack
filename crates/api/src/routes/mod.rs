@@ -6,5 +6,6 @@ pub mod dashboard_pp;
 pub mod entities;
 pub mod events;
 pub mod health;
+pub mod holding;
 pub mod operator;
 pub mod spa;
