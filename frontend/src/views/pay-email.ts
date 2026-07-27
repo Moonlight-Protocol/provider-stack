@@ -238,10 +238,7 @@ async function paySurface(): Promise<HTMLElement> {
 
     <section class="empty-state" style="margin-bottom:1.5rem">
       <h2 style="margin:0 0 0.25rem;font-size:1rem">Send</h2>
-      <p style="color:var(--text-muted);font-size:0.82rem;margin-bottom:1rem">
-        Send a transfer to a registered email.
-      </p>
-      <div class="form-row">
+      <div class="form-row" style="margin:0.5rem 0 0">
         <div class="form-group" style="margin-bottom:0;max-width:110px;min-width:90px">
           <label for="send-asset">Asset</label>
           <select id="send-asset" style="width:100%;padding:0.6rem 0.75rem;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text)"></select>
