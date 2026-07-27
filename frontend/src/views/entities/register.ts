@@ -92,8 +92,8 @@ export function entitiesRegisterView(): HTMLElement {
         <p class="mono" id="kyc-address" style="font-size:0.8rem;word-break:break-all;color:var(--text-muted);margin-bottom:1rem"></p>
 
         <div class="form-group">
-          <label for="kyc-name">Legal name</label>
-          <input type="text" id="kyc-name" maxlength="${NAME_MAX_LEN}" autocomplete="off" spellcheck="false" />
+          <label for="kyc-name">Email</label>
+          <input type="email" id="kyc-name" maxlength="${NAME_MAX_LEN}" autocomplete="off" spellcheck="false" />
         </div>
 
         <button id="kyc-submit-btn" class="btn-primary btn-wide">Sign and submit</button>
