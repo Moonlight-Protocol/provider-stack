@@ -6,7 +6,7 @@
  * client-only seed that generates UTXO keys and recovers the balance by
  * sweeping them in index order) so keys derive deterministically from the
  * wallet.
- * A separate name-based surface lands later at #/pay-name.
+ * A separate name-based surface lands later at #/pay-email.
  *
  * Signed in, three sections under the @moonlight/ui nav:
  *   Balance   — on-chain balance over the derived keys + deposit

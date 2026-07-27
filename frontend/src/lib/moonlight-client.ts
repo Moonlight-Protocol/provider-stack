@@ -452,7 +452,7 @@ export async function ensureTrustline(channel: ChannelIds): Promise<void> {
  * one first, for a classic asset's first withdraw). Bundle order matches
  * the reference client: WITHDRAW, change CREATE, SPENDs.
  *
- * `held` (the #/pay-name surface) lets the withdraw also draw on UTXOs the
+ * `held` (the #/pay-email surface) lets the withdraw also draw on UTXOs the
  * provider holds for this entity's email — their SPENDs go up unsigned and
  * the provider signs them at submit, transparently.
  */
@@ -508,7 +508,7 @@ export async function submitWithdraw(
   );
 }
 
-// ── Held UTXOs (send-via-email, #/pay-name) ────────────────────
+// ── Held UTXOs (send-via-email, #/pay-email) ────────────────────
 
 /**
  * A UTXO the provider holds for this entity's registered email. The provider

@@ -1,4 +1,4 @@
-//! Provider-held UTXO endpoints for the send-via-email surface (#/pay-name).
+//! Provider-held UTXO endpoints for the send-via-email surface (#/pay-email).
 //!
 //! Keys are derived on the spot from the PP secret + the email
 //! (`provider_stack_core::holding`) — no storage; unused/held state comes from

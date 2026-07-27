@@ -113,7 +113,7 @@ pub async fn post_submit(
         )));
     }
 
-    // Send-via-email (#/pay-name): spend slots that arrive unsigned must
+    // Send-via-email (#/pay-email): spend slots that arrive unsigned must
     // reference provider-held UTXOs derived for the submitter's registered
     // email — nobody else may direct those funds. Sign them in place so the
     // rest of the pipeline (and the executor's signature extraction) sees a

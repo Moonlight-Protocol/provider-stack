@@ -1,5 +1,5 @@
 /**
- * Entity send-via-email surface at #/pay-name.
+ * Entity send-via-email surface at #/pay-email.
  *
  * Same login ceremony and zero-persistence stance as #/pay-utxo (SEP-10 +
  * one master-seed signature; everything module-local, re-derived per visit).
@@ -180,7 +180,7 @@ function signOut(): void {
   clearEntityAuth();
   clearEntityWallet();
   clearDerivation();
-  navigate("/pay-name");
+  navigate("/pay-email");
   globalThis.dispatchEvent(new HashChangeEvent("hashchange"));
 }
 
@@ -196,7 +196,7 @@ async function paySurface(): Promise<HTMLElement> {
   const kycOk = kyc ? kyc.approved : true;
 
   const nav = renderNav({
-    brand: "Pay (Name)",
+    brand: "Pay (Email)",
     version: __APP_VERSION__,
     links: [],
     address: sub,
@@ -222,12 +222,18 @@ async function paySurface(): Promise<HTMLElement> {
     <section class="empty-state" style="margin:1.5rem 0">
       <div style="display:flex;justify-content:space-between;align-items:baseline">
         <h2 style="margin:0 0 0.25rem;font-size:1rem">Balance</h2>
-        <button id="refresh-btn" class="btn-link" title="Refresh balances" aria-label="Refresh balances" style="font-size:1rem;line-height:1" ${
+        <span style="display:flex;gap:0.5rem">
+          <button id="balance-advanced-btn" class="btn-link" title="Balance breakdown" aria-label="Balance breakdown" style="font-size:1rem;line-height:1" ${
+    channel && kycOk ? "" : "disabled"
+  }>⚙</button>
+          <button id="refresh-btn" class="btn-link" title="Refresh balances" aria-label="Refresh balances" style="font-size:1rem;line-height:1" ${
     channel && kycOk ? "" : "disabled"
   }>⟳</button>
+        </span>
       </div>
       <p id="balance-status" class="hint-text" style="margin:0 0 1rem"></p>
       <div id="asset-list"></div>
+      <div id="balance-advanced" style="margin-top:0.75rem" hidden></div>
     </section>
 
     <section class="empty-state" style="margin-bottom:1.5rem">
@@ -236,19 +242,19 @@ async function paySurface(): Promise<HTMLElement> {
         Send a transfer to a registered email.
       </p>
       <div class="form-row">
-        <div class="form-group" style="margin-bottom:0;max-width:160px">
+        <div class="form-group" style="margin-bottom:0;max-width:110px;min-width:90px">
           <label for="send-asset">Asset</label>
           <select id="send-asset" style="width:100%;padding:0.6rem 0.75rem;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text)"></select>
         </div>
-        <div class="form-group" style="margin-bottom:0;max-width:160px">
+        <div class="form-group" style="margin-bottom:0;max-width:110px;min-width:90px">
           <label for="send-amount">Amount</label>
-          <input id="send-amount" placeholder="0.00" />
+          <input id="send-amount" placeholder="0.00" style="width:100%" />
         </div>
-        <div class="form-group" style="margin-bottom:0">
+        <div class="form-group" style="margin-bottom:0;min-width:0">
           <label for="send-email">Email</label>
-          <input id="send-email" type="email" placeholder="recipient@example.com" autocomplete="off" spellcheck="false" />
+          <input id="send-email" type="email" placeholder="recipient@example.com" autocomplete="off" spellcheck="false" style="width:100%;min-width:0" />
         </div>
-        <button id="send-btn" class="btn-primary" disabled>Send</button>
+        <button id="send-btn" class="btn-primary" style="flex-shrink:0" disabled>Send</button>
       </div>
       <p id="send-error" class="error-text" style="margin-top:0.75rem" hidden></p>
       <div id="send-status"></div>
@@ -318,8 +324,10 @@ async function paySurface(): Promise<HTMLElement> {
   // Wallet-side XLM balance (stroops) — deposits are gated on it.
   let walletBalance = 0n;
   // Per asset: own channel balance + provider-held total, and the held
-  // UTXO list itself (spends/withdraws hand it to the client lib).
+  // UTXO list itself (spends/withdraws hand it to the client lib). The
+  // own/held split feeds the gear-toggled breakdown only.
   const assetBalances = new Map<number, bigint>();
+  const ownBalances = new Map<number, bigint>();
   const heldByAsset = new Map<number, HeldUtxo[]>();
 
   const sendBtn = $<HTMLButtonElement>("#send-btn");
@@ -387,22 +395,38 @@ async function paySurface(): Promise<HTMLElement> {
         c.assetCode || c.label || shortId(c.assetContractId),
       );
       const bal = assetBalances.get(i);
-      const held = heldByAsset.get(i) ?? [];
-      const heldTotal = held.reduce((acc, h) => acc + h.amount, 0n);
-      const heldNote = heldTotal > 0n
-        ? `<span class="hint-text" style="font-size:0.72rem;margin-left:0.5rem">(${
-          escapeHtml(fromStroops(heldTotal))
-        } held for you)</span>`
-        : "";
       return `<div style="display:flex;justify-content:space-between;align-items:center;padding:0.55rem 0;border-top:1px solid var(--border)">
-        <span>${code}${heldNote}</span>
+        <span>${code}</span>
         <span style="font-variant-numeric:tabular-nums">${
         bal === undefined ? "—" : escapeHtml(fromStroops(bal))
       }</span>
       </div>`;
     }).join("");
+    // Gear-toggled breakdown: the total above splits into the user's own
+    // UTXOs vs the ones the provider holds for their email.
+    $("#balance-advanced").innerHTML = channels.map((c, i) => {
+      const code = escapeHtml(
+        c.assetCode || c.label || shortId(c.assetContractId),
+      );
+      const own = ownBalances.get(i);
+      const heldTotal = (heldByAsset.get(i) ?? [])
+        .reduce((acc, h) => acc + h.amount, 0n);
+      const fmt = (v: bigint | undefined) =>
+        v === undefined ? "—" : escapeHtml(fromStroops(v));
+      return `<div style="display:flex;justify-content:space-between;align-items:center;padding:0.35rem 0;font-size:0.8rem;color:var(--text-muted)">
+        <span>${code}</span>
+        <span style="font-variant-numeric:tabular-nums">your UTXOs ${
+        fmt(own)
+      } · held for you ${own === undefined ? "—" : fmt(heldTotal)}</span>
+      </div>`;
+    }).join("");
   };
   refreshUI();
+
+  $("#balance-advanced-btn").addEventListener("click", () => {
+    const adv = $("#balance-advanced");
+    adv.hidden = !adv.hidden;
+  });
 
   const loadBalances = async () => {
     if (!channel) {
@@ -432,6 +456,7 @@ async function paySurface(): Promise<HTMLElement> {
         await refreshBalances(c);
         const held = await fetchHeldUtxos(c);
         heldByAsset.set(i, held);
+        ownBalances.set(i, balance());
         assetBalances.set(
           i,
           balance() + held.reduce((acc, h) => acc + h.amount, 0n),
@@ -602,7 +627,7 @@ async function paySurface(): Promise<HTMLElement> {
 
 // ── login flow ─────────────────────────────────────────────────
 
-export function payNameView(): HTMLElement {
+export function payEmailView(): HTMLElement {
   // Reset any entity state from a prior visit to this route in the same tab
   // — every visit starts at connect + SEP-10, mirroring the KYC route. The
   // authenticated surface is only ever reached via replaceWith after login.
@@ -615,7 +640,7 @@ export function payNameView(): HTMLElement {
 
   container.innerHTML = `
     <div class="login-card">
-      <h1>Pay (Name)</h1>
+      <h1>Pay (Email)</h1>
 
       <div id="step-connect">
         <p>Connect your Stellar wallet to send and receive through this provider.</p>
@@ -629,7 +654,7 @@ export function payNameView(): HTMLElement {
         <button id="change-wallet-btn" class="btn-link" style="margin-top:0.75rem;display:block;text-align:center;width:100%;color:var(--text-muted)">Use a different wallet</button>
       </div>
 
-      <p id="pay-name-login-error" class="error-text" style="text-align:center" hidden></p>
+      <p id="pay-email-login-error" class="error-text" style="text-align:center" hidden></p>
     </div>
   `;
 
@@ -638,7 +663,7 @@ export function payNameView(): HTMLElement {
   ) as HTMLDivElement;
   const signinStep = container.querySelector("#step-signin") as HTMLDivElement;
   const errorEl = container.querySelector(
-    "#pay-name-login-error",
+    "#pay-email-login-error",
   ) as HTMLParagraphElement;
 
   // Change wallet: clear the entity session and go back to step 1

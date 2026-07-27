@@ -1,4 +1,4 @@
-//! Provider-held ("holding") UTXO keys for the send-via-email surface (#/pay-name).
+//! Provider-held ("holding") UTXO keys for the send-via-email surface (#/pay-email).
 //!
 //! A payer sends funds to an email before the recipient necessarily exists as
 //! an entity: the provider derives P-256 keys of its own to hold those UTXOs,
