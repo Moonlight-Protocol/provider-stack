@@ -1,28 +1,19 @@
 /**
- * Entity UTXO payment surface at #/pay-utxo.
+ * Entity send-via-email surface at #/pay-email.
  *
- * Login: entity SEP-10 against GET/POST /stellar/auth (connect + sign),
- * then one master-seed signature ("Moonlight: Derive UTXO seed" — the
- * client-only seed that generates UTXO keys and recovers the balance by
- * sweeping them in index order) so keys derive deterministically from the
- * wallet.
- * A separate name-based surface lands later at #/pay-email.
+ * Same login ceremony and zero-persistence stance as #/pay-utxo (SEP-10 +
+ * one master-seed signature; everything module-local, re-derived per visit).
+ * The difference is the Send section: instead of pasting a payment code, the
+ * payer types the recipient's registered email. The provider derives holding
+ * UTXOs for that email on the spot (deterministic — no storage), the payer
+ * CREATEs onto them, and the funds count into the recipient's balance here
+ * as soon as they sign in with a matching KYC email — no claim step. Spends
+ * and withdraws draw on held UTXOs transparently: their SPENDs go up
+ * unsigned and the provider signs its own keys at submit.
  *
- * Signed in, three sections under the @moonlight/ui nav:
- *   Balance   — on-chain balance over the derived keys + deposit
- *   Request   — reserve derived keys, share the CREATE MLXDRs out of band
- *   Send      — paste receiver MLXDRs, spend funded derived UTXOs (no popup)
- *
- * Isolation contract — same stance as the KYC route (entities/register.ts):
- *   - ZERO persistence: address, JWT, seed, and keys live in module-local
- *     state only; nothing survives refresh. Everything re-derives from the
- *     wallet on the next visit.
- *   - No session bleed: never reads or writes the operator-auth storage.
- *
- * The channel is resolved from the provider itself (GET
- * /provider/entity/channels — the PP's council membership) and auto-selected
- * when there is exactly one. Channel-picker UX for multi-channel providers
- * is an open item.
+ * Section duplication with pay-utxo.ts is deliberate — the views stay
+ * self-contained (same stance as entities/register.ts), and #/pay-utxo is an
+ * open PR this surface must not destabilise.
  */
 import { renderNav } from "@moonlight/ui/nav";
 import { pageLayout } from "@moonlight/ui/layout";
@@ -41,14 +32,15 @@ import {
   DEPOSIT_FEE,
   ensureTrustline,
   EntityNotApprovedError,
+  fetchHeldUtxos,
   fromStroops,
   getBundle,
   getEntityChannels,
   getEntityStatus,
-  parseReceiverOps,
-  prepareReceive,
+  type HeldUtxo,
+  SEND_FEE,
   submitDeposit,
-  submitSend,
+  submitSendToEmail,
   submitWithdraw,
   toStroops,
   WITHDRAW_FEE,
@@ -150,10 +142,6 @@ function pollBundle(
 }
 
 /**
- * Not-approved is actionable: link the entity straight to this provider's
- * KYC form instead of echoing a bare 403.
- */
-/**
  * Minimal toast — @moonlight/ui (v0.3.x) ships no toast component, so this
  * styles itself with the library's tokens. Auto-dismisses.
  */
@@ -192,7 +180,7 @@ function signOut(): void {
   clearEntityAuth();
   clearEntityWallet();
   clearDerivation();
-  navigate("/pay-utxo");
+  navigate("/pay-email");
   globalThis.dispatchEvent(new HashChangeEvent("hashchange"));
 }
 
@@ -208,7 +196,7 @@ async function paySurface(): Promise<HTMLElement> {
   const kycOk = kyc ? kyc.approved : true;
 
   const nav = renderNav({
-    brand: "Pay (UTXO)",
+    brand: "Pay (Email)",
     version: __APP_VERSION__,
     links: [],
     address: sub,
@@ -229,45 +217,44 @@ async function paySurface(): Promise<HTMLElement> {
   })();
 
   content.innerHTML = `
-    <style>@keyframes pu-spin{to{transform:rotate(360deg)}}</style>
+    <style>@keyframes pn-spin{to{transform:rotate(360deg)}}</style>
     ${kycBannerHtml}
     <section class="empty-state" style="margin:1.5rem 0">
       <div style="display:flex;justify-content:space-between;align-items:baseline">
         <h2 style="margin:0 0 0.25rem;font-size:1rem">Balance</h2>
-        <button id="refresh-btn" class="btn-link" title="Refresh balances" aria-label="Refresh balances" style="font-size:1rem;line-height:1" ${
+        <span style="display:flex;gap:0.5rem">
+          <button id="balance-advanced-btn" class="btn-link" title="Balance breakdown" aria-label="Balance breakdown" style="font-size:1rem;line-height:1" ${
+    channel && kycOk ? "" : "disabled"
+  }>⚙</button>
+          <button id="refresh-btn" class="btn-link" title="Refresh balances" aria-label="Refresh balances" style="font-size:1rem;line-height:1" ${
     channel && kycOk ? "" : "disabled"
   }>⟳</button>
+        </span>
       </div>
       <p id="balance-status" class="hint-text" style="margin:0 0 1rem"></p>
       <div id="asset-list"></div>
+      <div id="balance-advanced" style="margin-top:0.75rem" hidden></div>
     </section>
 
     <section class="empty-state" style="margin-bottom:1.5rem">
-      <div style="display:flex;justify-content:space-between;align-items:baseline">
-        <h2 style="margin:0 0 0.25rem;font-size:1rem">Request transfer</h2>
-        <button id="request-advanced-btn" class="btn-link" title="Advanced options" aria-label="Advanced options" style="font-size:1rem;line-height:1" ${
-    kycOk ? "" : "disabled"
-  }>⚙</button>
-      </div>
-      <p style="color:var(--text-muted);font-size:0.82rem;margin-bottom:1rem">
-        Generate a payment code to request a transfer for the chosen asset.
-      </p>
-      <div class="form-row">
-        <div class="form-group" style="margin-bottom:0;max-width:160px">
-          <label for="request-asset">Asset</label>
-          <select id="request-asset" style="width:100%;padding:0.6rem 0.75rem;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text)"></select>
+      <h2 style="margin:0 0 0.25rem;font-size:1rem">Send</h2>
+      <div class="form-row" style="margin:0.5rem 0 0">
+        <div class="form-group" style="margin-bottom:0;max-width:110px;min-width:90px">
+          <label for="send-asset">Asset</label>
+          <select id="send-asset" style="width:100%;padding:0.6rem 0.75rem;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text)"></select>
         </div>
-        <div class="form-group" style="margin-bottom:0">
-          <label for="request-amount">Amount</label>
-          <input id="request-amount" placeholder="0.00" />
+        <div class="form-group" style="margin-bottom:0;max-width:110px;min-width:90px">
+          <label for="send-amount">Amount</label>
+          <input id="send-amount" placeholder="0.00" style="width:100%" />
         </div>
-        <button id="request-copy-btn" class="btn-primary" disabled>Get code</button>
+        <div class="form-group" style="margin-bottom:0;min-width:0">
+          <label for="send-email">Email</label>
+          <input id="send-email" type="email" placeholder="recipient@example.com" autocomplete="off" spellcheck="false" style="width:100%;min-width:0" />
+        </div>
+        <button id="send-btn" class="btn-primary" style="flex-shrink:0" disabled>Send</button>
       </div>
-      <div id="request-advanced" class="form-group" style="margin:0.75rem 0 0" hidden>
-        <label for="request-count">Number of UTXOs</label>
-        <input id="request-count" value="3" style="max-width:140px" />
-      </div>
-      <p id="request-error" class="error-text" style="margin-top:0.75rem" hidden></p>
+      <p id="send-error" class="error-text" style="margin-top:0.75rem" hidden></p>
+      <div id="send-status"></div>
     </section>
 
     <section class="empty-state" style="margin-bottom:1.5rem">
@@ -284,22 +271,6 @@ async function paySurface(): Promise<HTMLElement> {
         <button id="deposit-btn" class="btn-primary" disabled>Deposit</button>
       </div>
       <div id="deposit-status"></div>
-    </section>
-
-    <section class="empty-state" style="margin-bottom:1.5rem">
-      <h2 style="margin:0 0 0.25rem;font-size:1rem">Send</h2>
-      <p style="color:var(--text-muted);font-size:0.82rem;margin-bottom:1rem">
-        Use the payment code to send a transfer.
-      </p>
-      <div class="form-row">
-        <div class="form-group" style="margin-bottom:0">
-          <label for="send-code">Payment code</label>
-          <input id="send-code" placeholder="Paste the payment code" />
-        </div>
-        <button id="send-btn" class="btn-primary" disabled>Send</button>
-      </div>
-      <p id="send-error" class="error-text" style="margin-top:0.75rem" hidden></p>
-      <div id="send-status"></div>
     </section>
 
     <section class="empty-state" style="margin-bottom:3rem">
@@ -326,24 +297,56 @@ async function paySurface(): Promise<HTMLElement> {
   // Loading state: a spinner inside the disabled action button — never a
   // stepper. Failures still render their detail below the button.
   const SPINNER =
-    `<span style="display:inline-block;width:0.85em;height:0.85em;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:pu-spin 0.6s linear infinite;vertical-align:-0.08em"></span>`;
+    `<span style="display:inline-block;width:0.85em;height:0.85em;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:pn-spin 0.6s linear infinite;vertical-align:-0.08em"></span>`;
   const spin = (btn: HTMLButtonElement) => {
     btn.disabled = true;
     btn.innerHTML = SPINNER;
   };
 
-  // ── Balance: per-asset channel balances + wallet funds ──
+  // ── asset selects ──
+  const sendAssetSelect = $<HTMLSelectElement>("#send-asset");
   const depositAssetSelect = $<HTMLSelectElement>("#deposit-asset");
-  channels.forEach((c, i) => {
-    const opt = document.createElement("option");
-    opt.value = String(i);
-    opt.textContent = c.assetCode || c.label || shortId(c.assetContractId);
-    depositAssetSelect.appendChild(opt);
-  });
+  const withdrawAssetSelect = $<HTMLSelectElement>("#withdraw-asset");
+  for (
+    const select of [sendAssetSelect, depositAssetSelect, withdrawAssetSelect]
+  ) {
+    channels.forEach((c, i) => {
+      const opt = document.createElement("option");
+      opt.value = String(i);
+      opt.textContent = c.assetCode || c.label || shortId(c.assetContractId);
+      select.appendChild(opt);
+    });
+  }
 
   // Wallet-side XLM balance (stroops) — deposits are gated on it.
   let walletBalance = 0n;
+  // Per asset: own channel balance + provider-held total, and the held
+  // UTXO list itself (spends/withdraws hand it to the client lib). The
+  // own/held split feeds the gear-toggled breakdown only.
   const assetBalances = new Map<number, bigint>();
+  const ownBalances = new Map<number, bigint>();
+  const heldByAsset = new Map<number, HeldUtxo[]>();
+
+  const sendBtn = $<HTMLButtonElement>("#send-btn");
+  const syncSendBtn = () => {
+    let ok = !!channel && kycOk;
+    if (ok) {
+      try {
+        const amount = toStroops($<HTMLInputElement>("#send-amount").value);
+        const email = $<HTMLInputElement>("#send-email").value.trim();
+        const chanBalance =
+          assetBalances.get(Number(sendAssetSelect.value) || 0) ?? 0n;
+        ok = amount > 0n && email.length > 0 &&
+          amount + SEND_FEE <= chanBalance;
+      } catch {
+        ok = false;
+      }
+    }
+    sendBtn.disabled = !ok;
+  };
+  $("#send-amount").addEventListener("input", syncSendBtn);
+  $("#send-email").addEventListener("input", syncSendBtn);
+  $("#send-asset").addEventListener("input", syncSendBtn);
 
   const depositBtn = $<HTMLButtonElement>("#deposit-btn");
   const syncDepositBtn = () => {
@@ -361,15 +364,8 @@ async function paySurface(): Promise<HTMLElement> {
   $("#deposit-amount").addEventListener("input", syncDepositBtn);
   $("#deposit-asset").addEventListener("input", syncDepositBtn);
 
-  // Withdraw mirrors Deposit but is gated on the CHANNEL balance of the
-  // selected asset (the funds being moved out), not the wallet's.
-  const withdrawAssetSelect = $<HTMLSelectElement>("#withdraw-asset");
-  channels.forEach((c, i) => {
-    const opt = document.createElement("option");
-    opt.value = String(i);
-    opt.textContent = c.assetCode || c.label || shortId(c.assetContractId);
-    withdrawAssetSelect.appendChild(opt);
-  });
+  // Withdraw is gated on the CHANNEL balance (own + held) of the selected
+  // asset — the funds being moved out — not the wallet's.
   const withdrawBtn = $<HTMLButtonElement>("#withdraw-btn");
   const syncWithdrawBtn = () => {
     let ok = !!channel && kycOk;
@@ -403,8 +399,31 @@ async function paySurface(): Promise<HTMLElement> {
       }</span>
       </div>`;
     }).join("");
+    // Gear-toggled breakdown: the total above splits into the user's own
+    // UTXOs vs the ones the provider holds for their email.
+    $("#balance-advanced").innerHTML = channels.map((c, i) => {
+      const code = escapeHtml(
+        c.assetCode || c.label || shortId(c.assetContractId),
+      );
+      const own = ownBalances.get(i);
+      const heldTotal = (heldByAsset.get(i) ?? [])
+        .reduce((acc, h) => acc + h.amount, 0n);
+      const fmt = (v: bigint | undefined) =>
+        v === undefined ? "—" : escapeHtml(fromStroops(v));
+      return `<div style="display:flex;justify-content:space-between;align-items:center;padding:0.35rem 0;font-size:0.8rem;color:var(--text-muted)">
+        <span>${code}</span>
+        <span style="font-variant-numeric:tabular-nums">your UTXOs ${
+        fmt(own)
+      } · held for you ${own === undefined ? "—" : fmt(heldTotal)}</span>
+      </div>`;
+    }).join("");
   };
   refreshUI();
+
+  $("#balance-advanced-btn").addEventListener("click", () => {
+    const adv = $("#balance-advanced");
+    adv.hidden = !adv.hidden;
+  });
 
   const loadBalances = async () => {
     if (!channel) {
@@ -422,9 +441,9 @@ async function paySurface(): Promise<HTMLElement> {
       statusEl.textContent = "Checking your balances…";
       const address = getEntityAddress();
       if (address) walletBalance = await getNativeBalance(address);
-      // Refresh every asset's channel; the deposit-selected one last, so
+      // Refresh every asset's channel; the send-selected one last, so
       // reserve/spend state is left pointing at it.
-      const selected = Number(depositAssetSelect.value) || 0;
+      const selected = Number(sendAssetSelect.value) || 0;
       const order = channels
         .map((c, i) => ({ c, i }))
         .sort((a, b) =>
@@ -432,10 +451,17 @@ async function paySurface(): Promise<HTMLElement> {
         );
       for (const { c, i } of order) {
         await refreshBalances(c);
-        assetBalances.set(i, balance());
+        const held = await fetchHeldUtxos(c);
+        heldByAsset.set(i, held);
+        ownBalances.set(i, balance());
+        assetBalances.set(
+          i,
+          balance() + held.reduce((acc, h) => acc + h.amount, 0n),
+        );
       }
       statusEl.textContent = "";
       refreshUI();
+      syncSendBtn();
       syncDepositBtn();
       syncWithdrawBtn();
     } catch (e) {
@@ -447,6 +473,61 @@ async function paySurface(): Promise<HTMLElement> {
   loadBalances();
 
   $("#refresh-btn").addEventListener("click", () => loadBalances());
+
+  // ── Send ──
+  sendBtn.addEventListener("click", async () => {
+    const sendChannel = channels[Number(sendAssetSelect.value) || 0];
+    if (!sendChannel || !kycOk) return;
+    const errEl = $("#send-error");
+    const statusEl = $("#send-status");
+    const restore = () => {
+      sendBtn.textContent = "Send";
+      syncSendBtn();
+    };
+    errEl.hidden = true;
+    spin(sendBtn);
+    statusEl.innerHTML = "";
+    try {
+      if (!isSeedReady()) await loadBalances();
+      const amount = toStroops($<HTMLInputElement>("#send-amount").value);
+      const email = $<HTMLInputElement>("#send-email").value.trim();
+      const held = heldByAsset.get(Number(sendAssetSelect.value) || 0) ?? [];
+      const { bundleId } = await submitSendToEmail(
+        email,
+        amount,
+        sendChannel,
+        held,
+      );
+      capture("entity_send_email_submitted", { bundleId });
+      const stop = pollBundle(bundleId, (state) => {
+        if (state.status === "COMPLETED") {
+          showToast("Transfer sent");
+          $<HTMLInputElement>("#send-amount").value = "";
+          $<HTMLInputElement>("#send-email").value = "";
+          restore();
+          loadBalances();
+        } else if (
+          state.status === "FAILED" || state.status === "EXPIRED"
+        ) {
+          statusEl.innerHTML = stepperHtml(state);
+          restore();
+          loadBalances();
+        }
+      }, (err) => {
+        statusEl.innerHTML = stepperHtml(null, err);
+        restore();
+      });
+      onCleanup(stop);
+    } catch (e) {
+      if (e instanceof EntityNotApprovedError) {
+        statusEl.innerHTML = notApprovedHtml(e.providerPublicKey);
+      } else {
+        errEl.textContent = e instanceof Error ? e.message : String(e);
+        errEl.hidden = false;
+      }
+      restore();
+    }
+  });
 
   // ── Deposit ──
   depositBtn.addEventListener("click", async () => {
@@ -491,126 +572,6 @@ async function paySurface(): Promise<HTMLElement> {
     }
   });
 
-  // ── Request ──
-  const assetSelect = $<HTMLSelectElement>("#request-asset");
-  channels.forEach((c, i) => {
-    const opt = document.createElement("option");
-    opt.value = String(i);
-    opt.textContent = c.assetCode || c.label || shortId(c.assetContractId);
-    assetSelect.appendChild(opt);
-  });
-
-  $("#request-advanced-btn").addEventListener("click", () => {
-    const adv = $("#request-advanced");
-    adv.hidden = !adv.hidden;
-  });
-
-  const copyBtn = $<HTMLButtonElement>("#request-copy-btn");
-  const requestInputsValid = (): boolean => {
-    try {
-      const amount = toStroops($<HTMLInputElement>("#request-amount").value);
-      const count = Number($<HTMLInputElement>("#request-count").value);
-      return amount > 0n && Number.isInteger(count) && count >= 1;
-    } catch {
-      return false;
-    }
-  };
-  const syncCopyBtn = () => {
-    copyBtn.disabled = !kycOk || !requestInputsValid();
-  };
-  for (const sel of ["#request-amount", "#request-count", "#request-asset"]) {
-    $(sel).addEventListener("input", syncCopyBtn);
-  }
-
-  // One payment code per filled-in form: re-clicking with unchanged inputs
-  // copies the same code instead of reserving another set of keys.
-  let lastRequest = { key: "", code: "" };
-  copyBtn.addEventListener("click", async () => {
-    const errEl = $("#request-error");
-    errEl.hidden = true;
-    copyBtn.disabled = true;
-    try {
-      const amount = toStroops($<HTMLInputElement>("#request-amount").value);
-      const count = Number($<HTMLInputElement>("#request-count").value);
-      const key = `${assetSelect.value}|${amount}|${count}`;
-      if (lastRequest.key !== key) {
-        const mlxdrs = await prepareReceive(amount, count);
-        // Single line: the code must survive a paste into the Send input.
-        lastRequest = { key, code: mlxdrs.join(" ") };
-        capture("entity_receive_generated", { count });
-      }
-      await navigator.clipboard.writeText(lastRequest.code);
-      showToast("Copied to clipboard");
-    } catch (e) {
-      errEl.textContent = e instanceof Error ? e.message : String(e);
-      errEl.hidden = false;
-    } finally {
-      syncCopyBtn();
-    }
-  });
-
-  // ── Send ──
-  const sendBtn = $<HTMLButtonElement>("#send-btn");
-  const syncSendBtn = () => {
-    let ok = !!channel && kycOk;
-    if (ok) {
-      try {
-        parseReceiverOps($<HTMLInputElement>("#send-code").value);
-      } catch {
-        ok = false;
-      }
-    }
-    sendBtn.disabled = !ok;
-  };
-  $("#send-code").addEventListener("input", syncSendBtn);
-
-  sendBtn.addEventListener("click", async () => {
-    if (!channel || !kycOk) return;
-    const errEl = $("#send-error");
-    const statusEl = $("#send-status");
-    const restore = () => {
-      sendBtn.textContent = "Send";
-      syncSendBtn();
-    };
-    errEl.hidden = true;
-    spin(sendBtn);
-    statusEl.innerHTML = "";
-    try {
-      if (!isSeedReady()) await loadBalances();
-      const parsed = parseReceiverOps(
-        $<HTMLInputElement>("#send-code").value,
-      );
-      const { bundleId } = await submitSend(parsed, channel);
-      capture("entity_send_submitted", { bundleId });
-      const stop = pollBundle(bundleId, (state) => {
-        if (state.status === "COMPLETED") {
-          showToast("Transfer sent");
-          $<HTMLInputElement>("#send-code").value = "";
-          restore();
-          loadBalances();
-        } else if (
-          state.status === "FAILED" || state.status === "EXPIRED"
-        ) {
-          statusEl.innerHTML = stepperHtml(state);
-          restore();
-          loadBalances();
-        }
-      }, (err) => {
-        statusEl.innerHTML = stepperHtml(null, err);
-        restore();
-      });
-      onCleanup(stop);
-    } catch (e) {
-      if (e instanceof EntityNotApprovedError) {
-        statusEl.innerHTML = notApprovedHtml(e.providerPublicKey);
-      } else {
-        errEl.textContent = e instanceof Error ? e.message : String(e);
-        errEl.hidden = false;
-      }
-      restore();
-    }
-  });
-
   // ── Withdraw ──
   withdrawBtn.addEventListener("click", async () => {
     const withdrawChannel = channels[Number(withdrawAssetSelect.value) || 0];
@@ -628,7 +589,9 @@ async function paySurface(): Promise<HTMLElement> {
       // First withdraw of a classic asset may raise the one trustline
       // popup; XLM and Soroban tokens pass straight through.
       await ensureTrustline(withdrawChannel);
-      const bundleId = await submitWithdraw(amount, withdrawChannel);
+      const held = heldByAsset.get(Number(withdrawAssetSelect.value) || 0) ??
+        [];
+      const bundleId = await submitWithdraw(amount, withdrawChannel, held);
       capture("entity_withdraw_submitted", { bundleId });
       const stop = pollBundle(bundleId, (state) => {
         if (state.status === "COMPLETED") {
@@ -661,7 +624,7 @@ async function paySurface(): Promise<HTMLElement> {
 
 // ── login flow ─────────────────────────────────────────────────
 
-export function payUtxoView(): HTMLElement {
+export function payEmailView(): HTMLElement {
   // Reset any entity state from a prior visit to this route in the same tab
   // — every visit starts at connect + SEP-10, mirroring the KYC route. The
   // authenticated surface is only ever reached via replaceWith after login.
@@ -674,7 +637,7 @@ export function payUtxoView(): HTMLElement {
 
   container.innerHTML = `
     <div class="login-card">
-      <h1>Pay (UTXO)</h1>
+      <h1>Pay (Email)</h1>
 
       <div id="step-connect">
         <p>Connect your Stellar wallet to send and receive through this provider.</p>
@@ -688,7 +651,7 @@ export function payUtxoView(): HTMLElement {
         <button id="change-wallet-btn" class="btn-link" style="margin-top:0.75rem;display:block;text-align:center;width:100%;color:var(--text-muted)">Use a different wallet</button>
       </div>
 
-      <p id="pay-utxo-login-error" class="error-text" style="text-align:center" hidden></p>
+      <p id="pay-email-login-error" class="error-text" style="text-align:center" hidden></p>
     </div>
   `;
 
@@ -697,7 +660,7 @@ export function payUtxoView(): HTMLElement {
   ) as HTMLDivElement;
   const signinStep = container.querySelector("#step-signin") as HTMLDivElement;
   const errorEl = container.querySelector(
-    "#pay-utxo-login-error",
+    "#pay-email-login-error",
   ) as HTMLParagraphElement;
 
   // Change wallet: clear the entity session and go back to step 1
