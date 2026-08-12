@@ -37,7 +37,7 @@ pub struct PpRecord {
     pub council_memberships: Vec<PpMembership>,
 }
 
-fn pp_public_strkey_from_env(state: &AppState) -> Result<String, ApiError> {
+pub(crate) fn pp_public_strkey_from_env(state: &AppState) -> Result<String, ApiError> {
     let signing =
         provider_stack_core::auth::sep10::signing_key_from_seed(&state.config.pp_secret_key)?;
     Ok(format!(

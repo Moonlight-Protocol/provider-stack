@@ -33,6 +33,7 @@ fn cfg_with_capacity(capacity: usize) -> Arc<Config> {
         network: "standalone".into(),
         network_fee: 1_000_000,
         stellar_rpc_url: String::new(),
+        stellar_horizon_url: None,
         transaction_expiration_offset: 1_000,
         event_watcher_interval: StdDuration::from_millis(30_000),
         service_domain: "smoke.local".into(),

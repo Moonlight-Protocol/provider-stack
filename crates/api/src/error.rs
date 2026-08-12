@@ -19,6 +19,12 @@ pub enum ApiError {
     #[error("not implemented")]
     NotImplemented,
 
+    /// An upstream network dependency (Horizon / RPC) is unreachable or
+    /// answered with an error. 503, not 500: nothing is wrong with this
+    /// service, and the client may retry.
+    #[error("service unavailable: {0}")]
+    ServiceUnavailable(String),
+
     #[error("internal: {0}")]
     Internal(String),
 }
@@ -37,6 +43,7 @@ impl ResponseError for ApiError {
             Self::Forbidden => StatusCode::FORBIDDEN,
             Self::NotFound => StatusCode::NOT_FOUND,
             Self::NotImplemented => StatusCode::NOT_IMPLEMENTED,
+            Self::ServiceUnavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
             Self::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
@@ -48,6 +55,7 @@ impl ResponseError for ApiError {
             Self::Forbidden => "forbidden",
             Self::NotFound => "not_found",
             Self::NotImplemented => "not_implemented",
+            Self::ServiceUnavailable(_) => "service_unavailable",
             Self::Internal(_) => "internal",
         };
         HttpResponse::build(self.status_code()).json(ErrorBody {

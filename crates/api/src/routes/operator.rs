@@ -1,10 +1,17 @@
 //! Operator analytics endpoints. Single-PP: the PP is env-pinned, so the
 //! URLs carry no `:pp` segment — the routes are flat under `/provider/`.
 //!
-//! **Status**: scaffold — each returns an empty-shape JSON wrapped in the
-//! `{ data: ... }` envelope the SPA reads, with the field names the SPA
-//! consumers expect (metrics → `snapshots`, bundles list → `bundles`,
-//! treasury → `address`/`balances`/…). Replace with real implementations.
+//! Every route here answers from a real source — the repos in
+//! `provider-stack-persistence` or, for `/provider/treasury`, Horizon. There is
+//! deliberately no empty-shape placeholder left: an endpoint with nothing
+//! behind it is deleted, not stubbed, because a 200 carrying `[]` is read by
+//! the console as a truthful "nothing to report".
+//!
+//! Removed in the same pass (registered nowhere, consumed by nothing, and no
+//! repo query behind them): `/provider/channels`, `/provider/mempool` (queue
+//! depth is already served by `/provider/metrics`), `/provider/utxos`,
+//! `/provider/transactions`, `/provider/transactions/{id}` and
+//! `/provider/audit-export`.
 
 use crate::envelope::Data;
 use crate::error::ApiError;
@@ -19,53 +26,84 @@ use provider_stack_persistence::{
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 
-macro_rules! stub_get {
-    ($fn:ident, $path:literal, $body:expr) => {
-        #[get($path)]
-        pub async fn $fn(
-            _state: web::Data<AppState>,
-            _auth: OperatorAuth,
-        ) -> Result<impl Responder, ApiError> {
-            Ok::<_, ApiError>(HttpResponse::Ok().json(Data::new($body)))
-        }
-    };
+// -----------------------------------------------------------------------------
+// GET /provider/treasury — the PP's own Stellar account, read from Horizon.
+//
+// Consumed by the SPA's OpEx card (`frontend/src/lib/api.ts::getTreasury` →
+// `views/provider.ts`, which picks the `asset_type === "native"` balance).
+//
+// Horizon, not Soroban RPC: `balances` is the full multi-asset set (native plus
+// every trustline), and the account's trustlines cannot be enumerated over
+// `getLedgerEntries` — that call answers per exact ledger key, so an RPC-backed
+// version could only ever report the native balance and would silently drop a
+// USDC (or any issued-asset) treasury position. `balances` entries are relayed
+// verbatim so the wire shape stays Horizon's (`asset_type` / `asset_code` /
+// `balance`, which is what the SPA type declares).
+// -----------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+struct HorizonAccount {
+    sequence: String,
+    balances: Vec<JsonValue>,
+    last_modified_ledger: u32,
 }
 
-stub_get!(
-    get_channels,
-    "/provider/channels",
-    serde_json::json!({ "channels": [] })
-);
-stub_get!(
-    get_mempool,
-    "/provider/mempool",
-    serde_json::json!({ "slots": [] })
-);
-stub_get!(
-    get_treasury,
-    "/provider/treasury",
-    serde_json::json!({
-        "address": "",
-        "sequence": "0",
-        "balances": [],
-        "lastModifiedLedger": 0
-    })
-);
-stub_get!(
-    get_utxos,
-    "/provider/utxos",
-    serde_json::json!({ "utxos": [] })
-);
-stub_get!(
-    get_transactions,
-    "/provider/transactions",
-    serde_json::json!({ "transactions": [] })
-);
-stub_get!(
-    get_audit_export,
-    "/provider/audit-export",
-    serde_json::json!({ "entries": [] })
-);
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TreasuryPayload {
+    pub address: String,
+    pub sequence: String,
+    pub balances: Vec<JsonValue>,
+    pub last_modified_ledger: u32,
+}
+
+#[get("/provider/treasury")]
+pub async fn get_treasury(
+    state: web::Data<AppState>,
+    _auth: OperatorAuth,
+) -> Result<impl Responder, ApiError> {
+    let address = crate::routes::dashboard_pp::pp_public_strkey_from_env(&state)?;
+    // Mirrors the reference (`provider-platform/src/http/v1/dashboard/treasury.ts`):
+    // no Horizon URL configured is a per-request 503, not a boot failure.
+    let Some(horizon_url) = state.config.stellar_horizon_url.as_deref() else {
+        return Err(ApiError::ServiceUnavailable(
+            "no Horizon URL configured".into(),
+        ));
+    };
+    let url = format!("{horizon_url}/accounts/{address}");
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| ApiError::Internal(format!("http client: {e}")))?;
+
+    let resp = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| ApiError::ServiceUnavailable(format!("horizon unreachable: {e}")))?;
+
+    // Any non-OK from Horizon — including 404 for a not-yet-funded account — is
+    // a blanket 503, matching the reference implementation's error semantics.
+    if !resp.status().is_success() {
+        return Err(ApiError::ServiceUnavailable(format!(
+            "horizon returned {}",
+            resp.status()
+        )));
+    }
+
+    let account: HorizonAccount = resp
+        .json()
+        .await
+        .map_err(|e| ApiError::ServiceUnavailable(format!("horizon response: {e}")))?;
+
+    Ok(HttpResponse::Ok().json(Data::new(TreasuryPayload {
+        address,
+        sequence: account.sequence,
+        balances: account.balances,
+        last_modified_ledger: account.last_modified_ledger,
+    })))
+}
 
 #[derive(Deserialize)]
 pub struct MetricsQuery {
@@ -323,13 +361,4 @@ pub async fn get_bundle(
         jurisdictions,
         amount,
     })))
-}
-
-#[get("/provider/transactions/{tx_id}")]
-pub async fn get_transaction(
-    _state: web::Data<AppState>,
-    _auth: OperatorAuth,
-    _path: web::Path<String>,
-) -> Result<impl Responder, ApiError> {
-    Err::<HttpResponse, _>(ApiError::NotFound)
 }
