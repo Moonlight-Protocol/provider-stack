@@ -63,7 +63,14 @@ pub async fn get_treasury(
     _auth: OperatorAuth,
 ) -> Result<impl Responder, ApiError> {
     let address = crate::routes::dashboard_pp::pp_public_strkey_from_env(&state)?;
-    let url = format!("{}/accounts/{}", state.config.stellar_horizon_url, address);
+    // Mirrors the reference (`provider-platform/src/http/v1/dashboard/treasury.ts`):
+    // no Horizon URL configured is a per-request 503, not a boot failure.
+    let Some(horizon_url) = state.config.stellar_horizon_url.as_deref() else {
+        return Err(ApiError::ServiceUnavailable(
+            "no Horizon URL configured".into(),
+        ));
+    };
+    let url = format!("{horizon_url}/accounts/{address}");
 
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
@@ -76,11 +83,8 @@ pub async fn get_treasury(
         .await
         .map_err(|e| ApiError::ServiceUnavailable(format!("horizon unreachable: {e}")))?;
 
-    // 404 means the account is not funded yet — a real, reportable state, and
-    // not something the operator should see as a server error.
-    if resp.status() == reqwest::StatusCode::NOT_FOUND {
-        return Err(ApiError::NotFound);
-    }
+    // Any non-OK from Horizon — including 404 for a not-yet-funded account — is
+    // a blanket 503, matching the reference implementation's error semantics.
     if !resp.status().is_success() {
         return Err(ApiError::ServiceUnavailable(format!(
             "horizon returned {}",
