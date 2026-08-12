@@ -13,6 +13,15 @@ pub struct Config {
     pub network: String,
     pub network_fee: i64,
     pub stellar_rpc_url: String,
+    /// Horizon base URL (no trailing path), e.g. `https://horizon-testnet.stellar.org`.
+    ///
+    /// REQUIRED and explicit. It is deliberately NOT derived from
+    /// `stellar_rpc_url`: Horizon and Soroban RPC only share a host on the
+    /// local quickstart (`:8000` serves both). Deriving one from the other by
+    /// string surgery works locally and silently points at the wrong service on
+    /// testnet/mainnet, where they are separate deployments
+    /// (`soroban-testnet.stellar.org` vs `horizon-testnet.stellar.org`).
+    pub stellar_horizon_url: String,
     pub transaction_expiration_offset: u32,
     pub event_watcher_interval: Duration,
     pub service_domain: String,
@@ -52,6 +61,9 @@ impl Config {
                 default_rpc_for_network(env::var("NETWORK").unwrap_or_default().as_str())
                     .to_string()
             }),
+            stellar_horizon_url: required("STELLAR_HORIZON_URL")?
+                .trim_end_matches('/')
+                .to_string(),
             transaction_expiration_offset: env_or("TRANSACTION_EXPIRATION_OFFSET", "1000")?
                 .parse()?,
             event_watcher_interval: Duration::from_millis(

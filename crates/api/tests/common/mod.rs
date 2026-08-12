@@ -97,6 +97,7 @@ pub fn build_test_app_state(
         network: "standalone".into(),
         network_fee: 1_000_000,
         stellar_rpc_url: String::new(),
+        stellar_horizon_url: String::new(),
         transaction_expiration_offset: 1_000,
         event_watcher_interval: Duration::from_millis(30_000),
         service_domain: service_domain.into(),

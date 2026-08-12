@@ -50,6 +50,7 @@ fn make_test_state(pp_seed: [u8; 32], operator_pubkey_strkey: String) -> AppStat
         network: "standalone".into(),
         network_fee: 1_000_000,
         stellar_rpc_url: String::new(),
+        stellar_horizon_url: String::new(),
         transaction_expiration_offset: 1_000,
         event_watcher_interval: Duration::from_millis(30_000),
         service_domain: "smoke.local".into(),
