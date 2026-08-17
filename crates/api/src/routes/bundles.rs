@@ -275,6 +275,17 @@ pub async fn post_submit(
         tracing::info!("deriving bundle fee");
         derive_fee_from_classified(&classified, &spend_balances)
     };
+    // A bundle whose fee is not positive can never execute: the channel
+    // contract enforces bundle balance and the executor's injected fee Create
+    // needs a positive amount. Reject before the row is persisted so it never
+    // reaches the mempool. Mirrors provider-platform's admission rejection
+    // (BND_017 Insufficient balance).
+    if fee_i128 <= 0 {
+        tracing::info!(fee = %fee_i128, "rejecting bundle: insufficient balance");
+        return Err(ApiError::BadRequest(
+            "insufficient balance: bundle outflows meet or exceed inflows".into(),
+        ));
+    }
     let fee: i64 = fee_i128
         .try_into()
         .map_err(|_| ApiError::Internal("fee overflows i64".into()))?;

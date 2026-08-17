@@ -280,6 +280,147 @@ async fn processing_bundle_submitted_and_tx_row_recorded() {
     db.cleanup().await;
 }
 
+/// A PROCESSING bundle whose TTL passed after promotion (the mempool sweep only
+/// reaches PENDING rows) must never be submitted: the executor marks it EXPIRED
+/// at the execution gate, while a live bundle in the same tick still submits.
+/// And the failure write is status-gated, so EXPIRED is never overwritten with
+/// FAILED afterwards.
+#[actix_web::test]
+async fn expired_processing_bundle_marked_expired_not_submitted() {
+    let Some(db) = skip_if_no_db().await else {
+        return;
+    };
+
+    let rpc = MockServer::start().await;
+    let pp_pubkey_bytes = SigningKey::from_bytes(&pp_keypair_seed())
+        .verifying_key()
+        .to_bytes();
+
+    Mock::given(method("POST"))
+        .and(path("/"))
+        .and(body_partial_json(json!({ "method": "getLedgerEntries" })))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(ledger_entries_response(pp_pubkey_bytes)),
+        )
+        .mount(&rpc)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/"))
+        .and(body_partial_json(json!({ "method": "sendTransaction" })))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(send_tx_response("TX_HASH_TTL_LIVE")),
+        )
+        .mount(&rpc)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/"))
+        .and(body_partial_json(
+            json!({ "method": "simulateTransaction" }),
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(simulate_tx_response()))
+        .mount(&rpc)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/"))
+        .and(body_partial_json(json!({ "method": "getLatestLedger" })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(latest_ledger_response()))
+        .mount(&rpc)
+        .await;
+
+    let bundles_repo = OperationsBundleRepo::new(db.pool.clone());
+    let now = Utc::now();
+    let channel_id_owned = format!("{}", stellar_strkey::Contract([0x11u8; 32]));
+    let channel_id = channel_id_owned.as_str();
+
+    // One bundle past its TTL, one live — both PROCESSING.
+    bundles_repo
+        .create(
+            "BUNDLE-TTL-EXPIRED",
+            now - Duration::hours(1),
+            &json!([]),
+            0,
+            Some(channel_id),
+            Some("test"),
+        )
+        .await
+        .unwrap();
+    bundles_repo
+        .set_status("BUNDLE-TTL-EXPIRED", BundleStatus::Processing)
+        .await
+        .unwrap();
+    bundles_repo
+        .create(
+            "BUNDLE-TTL-LIVE",
+            now + Duration::hours(1),
+            &json!([]),
+            0,
+            Some(channel_id),
+            Some("test"),
+        )
+        .await
+        .unwrap();
+    bundles_repo
+        .set_status("BUNDLE-TTL-LIVE", BundleStatus::Processing)
+        .await
+        .unwrap();
+
+    let config = cfg(&rpc.uri());
+    let server = Server::new(
+        &rpc.uri(),
+        Options {
+            allow_http: true,
+            ..Options::default()
+        },
+    )
+    .unwrap();
+    let events = EventBroadcaster::new(256, "GTESTPP".to_string());
+    run_tick(&server, &db.pool, &config, &events)
+        .await
+        .expect("executor tick");
+
+    // Expired bundle: EXPIRED, no transaction ever created for it.
+    let status: String =
+        sqlx::query_scalar("SELECT status::text FROM operations_bundles WHERE id = $1")
+            .bind("BUNDLE-TTL-EXPIRED")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+    assert_eq!(status, "EXPIRED", "past-TTL bundle must end EXPIRED");
+    let expired_links: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM bundles_transactions WHERE bundle_id = $1")
+            .bind("BUNDLE-TTL-EXPIRED")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+    assert_eq!(expired_links, 0, "past-TTL bundle must not be submitted");
+
+    // Live bundle in the same tick: submitted and linked as usual.
+    let live_links: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM bundles_transactions WHERE bundle_id = $1 AND transaction_id = $2",
+    )
+    .bind("BUNDLE-TTL-LIVE")
+    .bind("TX_HASH_TTL_LIVE")
+    .fetch_one(&db.pool)
+    .await
+    .unwrap();
+    assert_eq!(live_links, 1, "live bundle must still submit");
+
+    // Status-gated failure write: FAILED never overwrites EXPIRED.
+    bundles_repo
+        .mark_failed("BUNDLE-TTL-EXPIRED", "must not overwrite", None)
+        .await
+        .unwrap();
+    let status: String =
+        sqlx::query_scalar("SELECT status::text FROM operations_bundles WHERE id = $1")
+            .bind("BUNDLE-TTL-EXPIRED")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+    assert_eq!(status, "EXPIRED", "mark_failed must not overwrite EXPIRED");
+
+    db.cleanup().await;
+}
+
 #[actix_web::test]
 async fn executor_skips_when_no_processing_bundles() {
     let Some(db) = skip_if_no_db().await else {
