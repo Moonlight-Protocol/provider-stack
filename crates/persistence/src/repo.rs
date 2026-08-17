@@ -383,6 +383,10 @@ impl OperationsBundleRepo {
         Ok(())
     }
 
+    /// Status-gated: only a live (PENDING/PROCESSING) bundle can move to
+    /// FAILED. A terminal status — EXPIRED, COMPLETED, FAILED — is never
+    /// overwritten, so a bundle expired between listing and the failure
+    /// write stays EXPIRED.
     pub async fn mark_failed(
         &self,
         id: &str,
@@ -393,7 +397,8 @@ impl OperationsBundleRepo {
             r#"UPDATE operations_bundles
                SET status = 'FAILED'::bundle_status, last_failure_reason = $2, failure_detail = $3,
                    retry_count = retry_count + 1, updated_at = now()
-               WHERE id = $1"#,
+               WHERE id = $1
+                 AND status IN ('PENDING'::bundle_status, 'PROCESSING'::bundle_status)"#,
         )
         .bind(id)
         .bind(reason)

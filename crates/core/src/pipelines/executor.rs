@@ -112,6 +112,16 @@ pub async fn run_tick(
         if !existing.is_empty() {
             continue;
         }
+        // TTL gate. The mempool sweep only reaches PENDING rows, so a bundle
+        // whose TTL passes after promotion would still be submitted here. A
+        // bundle past its TTL must never execute — end it EXPIRED, not FAILED.
+        if bundle.ttl < chrono::Utc::now() {
+            warn!(bundle = %bundle.id, ttl = %bundle.ttl, "executor: bundle past TTL; marking EXPIRED");
+            bundles
+                .set_status(&bundle.id, BundleStatus::Expired)
+                .await?;
+            continue;
+        }
         if let Err(e) = submit_one(&ctx, &bundle).await {
             warn!(bundle = %bundle.id, error = %e, "executor: bundle submission failed");
             bundles

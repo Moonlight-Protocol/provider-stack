@@ -181,6 +181,107 @@ async fn bundle_with_deposit_plus_create_computes_correct_fee() {
     db.cleanup().await;
 }
 
+/// A bundle whose outflows exceed its inflows derives a negative fee and can
+/// never execute — rejected at admission with 400, never persisted.
+#[actix_web::test]
+async fn overspend_bundle_rejected_at_admission() {
+    let Some(db) = skip_if_no_db().await else {
+        return;
+    };
+
+    let pp_seed = [0xABu8; 32];
+    let operator_strkey = pp_strkey([0xCCu8; 32]);
+    let state = build_test_app_state(pp_seed, operator_strkey, db.pool.clone(), SERVICE_DOMAIN);
+    let token = entity_jwt(&state);
+    seed_approved_entity(&db.pool).await;
+
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state.clone()))
+            .configure(routing::configure),
+    )
+    .await;
+
+    // 1 deposit (100) + 1 create (500) → fee = 100 - 500 = -400.
+    let ops = vec![deposit_mlxdr(100), create_mlxdr([0x11u8; 65], 500)];
+
+    let req = test::TestRequest::post()
+        .uri("/api/v1/provider/entity/bundles")
+        .insert_header(("Authorization", format!("Bearer {token}")))
+        .set_json(json!({ "operationsMLXDR": ops }))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(
+        resp.status().as_u16(),
+        400,
+        "expected 400 for overspend bundle; got {}",
+        resp.status()
+    );
+    let body: Value = test::read_body_json(resp).await;
+    assert!(
+        body["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("insufficient balance"),
+        "unexpected error body: {body}"
+    );
+
+    // Never persisted — no row stands next to honest bundles in the mempool.
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM operations_bundles")
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+    assert_eq!(count, 0, "overspend bundle must not be persisted");
+
+    db.cleanup().await;
+}
+
+/// A zero-fee bundle (inflows exactly consumed by outflows) is equally
+/// unfundable — the executor's fee Create needs a positive amount.
+#[actix_web::test]
+async fn zero_fee_bundle_rejected_at_admission() {
+    let Some(db) = skip_if_no_db().await else {
+        return;
+    };
+
+    let pp_seed = [0xABu8; 32];
+    let operator_strkey = pp_strkey([0xCCu8; 32]);
+    let state = build_test_app_state(pp_seed, operator_strkey, db.pool.clone(), SERVICE_DOMAIN);
+    let token = entity_jwt(&state);
+    seed_approved_entity(&db.pool).await;
+
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(state.clone()))
+            .configure(routing::configure),
+    )
+    .await;
+
+    // 1 deposit (500) + 1 create (500) → fee = 0.
+    let ops = vec![deposit_mlxdr(500), create_mlxdr([0x11u8; 65], 500)];
+
+    let req = test::TestRequest::post()
+        .uri("/api/v1/provider/entity/bundles")
+        .insert_header(("Authorization", format!("Bearer {token}")))
+        .set_json(json!({ "operationsMLXDR": ops }))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(
+        resp.status().as_u16(),
+        400,
+        "expected 400 for zero-fee bundle; got {}",
+        resp.status()
+    );
+
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM operations_bundles")
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+    assert_eq!(count, 0, "zero-fee bundle must not be persisted");
+
+    db.cleanup().await;
+}
+
 #[actix_web::test]
 async fn empty_operations_returns_400() {
     let Some(db) = skip_if_no_db().await else {
